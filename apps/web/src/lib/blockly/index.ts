@@ -8,23 +8,84 @@ export const pythonGenerator = BlocklyPython.pythonGenerator as any;
 const C_BLUE = 200;
 const C_GREEN = 120;
 
+// Small inline SVG “info” icon
+const INFO_ICON =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20">
+      <circle cx="10" cy="10" r="9" fill="#3b82f6"/>
+      <rect x="9" y="7" width="2" height="2" fill="white"/>
+      <rect x="9" y="10" width="2" height="6" fill="white"/>
+    </svg>`
+  );
+
 function setStatement(block: any) {
   block.setPreviousStatement(true, null);
   block.setNextStatement(true, null);
   block.setDeletable(true);
 }
 
-// ---------------- Module 1 Blocks ----------------
+function setStatementIO(block: any) {
+  block.setPreviousStatement(true, null);
+  block.setNextStatement(true, null);
+  block.setDeletable(true);
+}
+
+/** Attach a clickable (i) icon and set tooltip; dispatches a window event the page listens for */
+function appendInfo(
+  block: any,
+  text: string,
+  firstInputName?: string,
+  title?: string
+) {
+  block.setTooltip(text);
+
+  const img = new (Blockly as any).FieldImage(
+    INFO_ICON,
+    16,
+    16,
+    "*",
+    () => {
+      window.dispatchEvent(
+        new CustomEvent("vb:blockInfo", {
+          detail: {
+            title: title || "What does this block do?",
+            text,
+          },
+        })
+      );
+    }
+  );
+
+  const first =
+    (firstInputName && block.getInput(firstInputName)) ||
+    block.inputList?.[0] ||
+    null;
+  if (first) {
+    first.appendField(" ").appendField(img);
+  } else {
+    block.appendDummyInput().appendField(img);
+  }
+}
+
+/* =========================================================================
+   Module 1 Blocks
+   ========================================================================= */
 
 // ---------------- Datasets ----------------
 Blockly.Blocks["dataset.select"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("use dataset")
       .appendField(new (Blockly as any).FieldDropdown(() => DATASET_OPTIONS), "DATASET");
     setStatement(this);
     this.setColour(C_BLUE);
-    this.setTooltip("Choose one of the provided datasets (sets current dataset).");
+    appendInfo(
+      this,
+      "Pick which image set you want to work with. Think of it like choosing a folder full of pictures!",
+      "ROW",
+      "Use dataset"
+    );
   },
 };
 
@@ -37,37 +98,50 @@ export function setDatasetOptions(pairs: { name: string; key: string }[]) {
 
 Blockly.Blocks["dataset.info"] = {
   init: function () {
-    this.appendDummyInput().appendField("dataset info");
+    this.appendDummyInput("ROW").appendField("dataset info");
     setStatement(this);
     this.setColour(C_BLUE);
-    this.setTooltip("Show basic information: name and class list.");
+    appendInfo(
+      this,
+      "Shows the dataset’s name and which classes (labels) it contains. Great for a quick overview!",
+      "ROW",
+      "Dataset info"
+    );
   },
 };
 
-// class counts block
 Blockly.Blocks["dataset.class_counts"] = {
   init: function () {
-    this.appendDummyInput().appendField("class counts");
+    this.appendDummyInput("ROW").appendField("class counts");
     setStatement(this);
     this.setColour(C_BLUE);
-    this.setTooltip("Show how many images are in each class.");
+    appendInfo(
+      this,
+      "Tells you how many images are in each class. Helpful to spot if one class has way more pictures than others.",
+      "ROW",
+      "Class counts"
+    );
   },
 };
 
-// Stays here (under Datasets category in toolbox)
 Blockly.Blocks["dataset.class_distribution_preview"] = {
   init: function () {
-    this.appendDummyInput().appendField("class distribution preview (percent)");
+    this.appendDummyInput("ROW").appendField("class distribution preview (percent)");
     setStatement(this);
     this.setColour(C_BLUE);
-    this.setTooltip("Show the share (%) of each class in the selected dataset.");
+    appendInfo(
+      this,
+      "Shows the percentage for each class. If one class is too big, your robot might get biased!",
+      "ROW",
+      "Class distribution"
+    );
   },
 };
 
 // ---------------- Images ----------------
 Blockly.Blocks["dataset.sample_image"] = {
   init: function () {
-    this.appendDummyInput().appendField("get sample image");
+    this.appendDummyInput("TITLE").appendField("get sample image");
 
     const modeField = new (Blockly as any).FieldDropdown(
       [
@@ -85,116 +159,115 @@ Blockly.Blocks["dataset.sample_image"] = {
       }
     );
 
-    this.appendDummyInput()
+    this.appendDummyInput("MODE_ROW")
       .appendField("mode")
       .appendField(modeField, "MODE");
 
-    // put the index in its own input so we can hide/show it
     this.appendDummyInput("IDX_WRAP")
       .appendField("index")
       .appendField(new (Blockly as any).FieldNumber(0, 0, 999999, 1), "INDEX");
 
-    // default visibility: hidden (since default is "random")
     this.getInput("IDX_WRAP")?.setVisible(false);
 
     setStatement(this);
     this.setColour(C_GREEN);
-    this.setTooltip("Pick a sample image (random or by index).");
+    appendInfo(
+      this,
+      "Grabs one picture to preview your steps. Random picks a surprise; by index lets you choose a specific one.",
+      "TITLE",
+      "Get sample image"
+    );
   },
 };
 
 Blockly.Blocks["image.show"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("show image")
       .appendField("title")
       .appendField(new (Blockly as any).FieldTextInput("Sample"), "TITLE");
     setStatement(this);
     this.setColour(C_GREEN);
-    this.setTooltip("Display the most recently sampled image.");
+    appendInfo(
+      this,
+      "Displays the current picture in the output panel with a title you choose.",
+      "ROW",
+      "Show image"
+    );
   },
 };
 
+// (These remain defined for Module 1 completeness)
 Blockly.Blocks["image.shape"] = {
   init: function () {
-    this.appendDummyInput().appendField("show image shape");
+    this.appendDummyInput("ROW").appendField("show image shape");
     setStatement(this);
     this.setColour(C_GREEN);
-    this.setTooltip("Shows the image shape (will be precise in Module 2).");
+    appendInfo(
+      this,
+      "Shows image size like height × width × channels (RGB has 3 channels).",
+      "ROW",
+      "Image shape"
+    );
   },
 };
 
 Blockly.Blocks["image.channels_split"] = {
   init: function () {
-    this.appendDummyInput().appendField("split RGB channels (preview)");
+    this.appendDummyInput("ROW").appendField("split RGB channels (preview)");
     setStatement(this);
     this.setColour(C_GREEN);
-    this.setTooltip("Preview Red, Green, and Blue channels of the last sample.");
+    appendInfo(
+      this,
+      "Looks at Red, Green, and Blue separately—like turning on one color at a time.",
+      "ROW",
+      "Split RGB channels"
+    );
   },
 };
 
 Blockly.Blocks["image.to_grayscale_preview"] = {
   init: function () {
-    this.appendDummyInput().appendField("grayscale preview");
+    this.appendDummyInput("ROW").appendField("grayscale preview");
     setStatement(this);
     this.setColour(C_GREEN);
-    this.setTooltip("Preview a grayscale version of the last sample.");
+    appendInfo(
+      this,
+      "Shows the image in shades of gray. Good for focusing on shapes without colors.",
+      "ROW",
+      "Grayscale preview"
+    );
   },
 };
 
-// --- Minimal generators so pythonGenerator doesn't error ---
-pythonGenerator.forBlock["dataset.select"] = () => "# dataset.select\n";
-pythonGenerator.forBlock["dataset.info"] = () => "# dataset.info\n";
-pythonGenerator.forBlock["dataset.class_counts"] = () => "# dataset.class_counts\n";
-pythonGenerator.forBlock["dataset.class_distribution_preview"] = () => "# dataset.class_distribution_preview\n";
-pythonGenerator.forBlock["dataset.sample_image"] = () => "# dataset.sample_image\n";
-pythonGenerator.forBlock["image.show"] = () => "# image.show\n";
-pythonGenerator.forBlock["image.shape"] = () => "# image.shape\n";
-pythonGenerator.forBlock["image.channels_split"] = () => "# image.channels_split\n";
-pythonGenerator.forBlock["image.to_grayscale_preview"] = () => "# image.to_grayscale_preview\n";
+/* =========================================================================
+   Module 2 Blocks
+   ========================================================================= */
 
-// ---------------- Module 2 Blocks ----------------
-
-// Small helpers
 const C_VIOLET = 260; // preprocessing
-const C_AMBER = 40;   // analysis
-
-function setStatementIO(block: any) {
-  // Statement block that also can contain inner statements (for loops)
-  block.setPreviousStatement(true, null);
-  block.setNextStatement(true, null);
-  block.setDeletable(true);
-}
-
-// Working image reset
-Blockly.Blocks["m2.reset_working"] = {
-  init: function () {
-    this.appendDummyInput().appendField("reset working image");
-    setStatement(this);
-    this.setColour(C_VIOLET);
-    this.setTooltip("Set the working image back to the original sample.");
-  },
-};
 
 // Resize
 Blockly.Blocks["m2.resize"] = {
   init: function () {
-    const mode = new (Blockly as any).FieldDropdown([
-      ["to size", "size"],
-      ["fit within", "fit"],
-      ["scale (%)", "scale"],
-    ], (val: string) => {
-      const blk = mode.getSourceBlock();
-      if (!blk) return val;
-      blk.getInput("SIZE_WRAP")?.setVisible(val === "size");
-      blk.getInput("FIT_WRAP")?.setVisible(val === "fit");
-      blk.getInput("SCALE_WRAP")?.setVisible(val === "scale");
-      blk.render(false);
-      return val;
-    });
+    const mode = new (Blockly as any).FieldDropdown(
+      [
+        ["to size", "size"],
+        ["fit within", "fit"],
+        ["scale (%)", "scale"],
+      ],
+      (val: string) => {
+        const blk = mode.getSourceBlock();
+        if (!blk) return val;
+        blk.getInput("SIZE_WRAP")?.setVisible(val === "size");
+        blk.getInput("FIT_WRAP")?.setVisible(val === "fit");
+        blk.getInput("SCALE_WRAP")?.setVisible(val === "scale");
+        blk.render(false);
+        return val;
+      }
+    );
 
-    this.appendDummyInput().appendField("resize image");
-    this.appendDummyInput().appendField("mode").appendField(mode, "MODE");
+    this.appendDummyInput("TITLE").appendField("resize image");
+    this.appendDummyInput("MODE_ROW").appendField("mode").appendField(mode, "MODE");
 
     this.appendDummyInput("SIZE_WRAP")
       .appendField("width")
@@ -212,21 +285,25 @@ Blockly.Blocks["m2.resize"] = {
       .appendField("percent")
       .appendField(new (Blockly as any).FieldNumber(100, 1, 1000, 1), "PCT");
 
-    // default visible
     this.getInput("SIZE_WRAP")?.setVisible(true);
     this.getInput("FIT_WRAP")?.setVisible(false);
     this.getInput("SCALE_WRAP")?.setVisible(false);
 
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Resize using size, fit within max side, or scale percent.");
+    appendInfo(
+      this,
+      "Changes image size. ‘Keep aspect’ avoids squishing the image, ‘fit within’ makes the long side your target, and ‘scale’ grows or shrinks by percent.",
+      "TITLE",
+      "Resize"
+    );
   },
 };
 
 // Center crop
 Blockly.Blocks["m2.crop_center"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("center crop")
       .appendField("width")
       .appendField(new (Blockly as any).FieldNumber(224, 1, 4096, 1), "W")
@@ -234,32 +311,42 @@ Blockly.Blocks["m2.crop_center"] = {
       .appendField(new (Blockly as any).FieldNumber(224, 1, 4096, 1), "H");
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Crop centered region to width × height.");
+    appendInfo(
+      this,
+      "Cuts out a rectangle from the middle, like zooming into the center.",
+      "ROW",
+      "Center crop"
+    );
   },
 };
 
 // Pad
 Blockly.Blocks["m2.pad"] = {
   init: function () {
-    const mode = new (Blockly as any).FieldDropdown([
-      ["constant (color)", "constant"],
-      ["edge", "edge"],
-      ["reflect", "reflect"],
-    ], (val: string) => {
-      const blk = mode.getSourceBlock();
-      const colorInput = blk?.getInput("COLOR_WRAP");
-      if (colorInput) {
-        colorInput.setVisible(val === "constant");
-        blk?.render(false);
+    const mode = new (Blockly as any).FieldDropdown(
+      [
+        ["constant (color)", "constant"],
+        ["edge", "edge"],
+        ["reflect", "reflect"],
+      ],
+      (val: string) => {
+        const blk = mode.getSourceBlock();
+        const colorInput = blk?.getInput("COLOR_WRAP");
+        if (colorInput) {
+          colorInput.setVisible(val === "constant");
+          blk?.render(false);
+        }
+        return val;
       }
-      return val;
-    });
+    );
 
-    this.appendDummyInput().appendField("pad image to size");
-    this.appendDummyInput()
-      .appendField("width").appendField(new (Blockly as any).FieldNumber(256, 1, 4096, 1), "W")
-      .appendField("height").appendField(new (Blockly as any).FieldNumber(256, 1, 4096, 1), "H");
-    this.appendDummyInput().appendField("mode").appendField(mode, "MODE");
+    this.appendDummyInput("TITLE").appendField("pad image to size");
+    this.appendDummyInput("SIZE_ROW")
+      .appendField("width")
+      .appendField(new (Blockly as any).FieldNumber(256, 1, 4096, 1), "W")
+      .appendField("height")
+      .appendField(new (Blockly as any).FieldNumber(256, 1, 4096, 1), "H");
+    this.appendDummyInput("MODE_ROW").appendField("mode").appendField(mode, "MODE");
     this.appendDummyInput("COLOR_WRAP")
       .appendField("color (R,G,B)")
       .appendField(new (Blockly as any).FieldNumber(0, 0, 255, 1), "R")
@@ -269,14 +356,19 @@ Blockly.Blocks["m2.pad"] = {
 
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Pad to target size with a chosen mode. Color is used only for constant mode.");
+    appendInfo(
+      this,
+      "Adds borders so the picture becomes an exact size. Useful when an image has a different width and height.",
+      "TITLE",
+      "Pad image"
+    );
   },
 };
 
 // Brightness / Contrast
 Blockly.Blocks["m2.brightness_contrast"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("brightness / contrast")
       .appendField("brightness")
       .appendField(new (Blockly as any).FieldNumber(0, -50, 50, 1), "B")
@@ -284,14 +376,19 @@ Blockly.Blocks["m2.brightness_contrast"] = {
       .appendField(new (Blockly as any).FieldNumber(0, -50, 50, 1), "C");
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Adjust brightness and contrast.");
+    appendInfo(
+      this,
+      "Bright = lighter, contrast = stronger color differences. Useful if photos look too dark or flat.",
+      "ROW",
+      "Brightness & Contrast"
+    );
   },
 };
 
 // Blur / Sharpen
 Blockly.Blocks["m2.blur_sharpen"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("blur / sharpen")
       .appendField("blur radius")
       .appendField(new (Blockly as any).FieldNumber(0, 0, 20, 0.5), "BLUR")
@@ -299,7 +396,12 @@ Blockly.Blocks["m2.blur_sharpen"] = {
       .appendField(new (Blockly as any).FieldNumber(0, 0, 3, 0.1), "SHARP");
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Apply blur and/or sharpening.");
+    appendInfo(
+      this,
+      "Blur smooths details, and sharpen makes edges crisper. Try small changes first.",
+      "ROW",
+      "Blur & Sharpen"
+    );
   },
 };
 
@@ -312,142 +414,149 @@ Blockly.Blocks["m2.edges"] = {
       ["Laplacian", "laplacian"],
       ["Prewitt", "prewitt"],
     ]);
-    this.appendDummyInput()
+    this.appendDummyInput("TITLE")
       .appendField("detect edges")
-      .appendField("method").appendField(method, "METHOD");
-    this.appendDummyInput()
+      .appendField("method")
+      .appendField(method, "METHOD");
+    this.appendDummyInput("T_ROW")
       .appendField("threshold")
       .appendField(new (Blockly as any).FieldNumber(100, 0, 255, 1), "THRESH");
-    this.appendDummyInput()
+    this.appendDummyInput("O_ROW")
       .appendField("overlay")
       .appendField(new (Blockly as any).FieldCheckbox("FALSE"), "OVERLAY");
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Highlight edges using the selected method.");
+    appendInfo(
+      this,
+      "Finds the outlines in a picture. Edges help the robot notice shapes and boundaries.",
+      "TITLE",
+      "Edge detection"
+    );
   },
 };
 
-// To grayscale (actual transform)
+// To grayscale
 Blockly.Blocks["m2.to_grayscale"] = {
   init: function () {
-    this.appendDummyInput().appendField("convert to grayscale");
+    this.appendDummyInput("ROW").appendField("convert to grayscale");
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Convert working image to grayscale.");
+    appendInfo(
+      this,
+      "Removes color so only light and dark remain. Great when color isn’t important.",
+      "ROW",
+      "Grayscale"
+    );
   },
 };
 
-// Normalize
+// Normalize (improved kid-friendly explanation)
 Blockly.Blocks["m2.normalize"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("ROW")
       .appendField("normalize pixels")
-      .appendField(new (Blockly as any).FieldDropdown([
-        ["0–1", "zero_one"],
-        ["-1–1", "minus_one_one"],
-        ["z-score (per channel)", "zscore"],
-      ]), "MODE");
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["0–1", "zero_one"],
+          ["-1–1", "minus_one_one"],
+          ["z-score (per channel)", "zscore"],
+        ]),
+        "MODE"
+      );
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Scale pixel values to a standard range.");
-  },
-};
-
-// Show working image
-Blockly.Blocks["m2.show_working"] = {
-  init: function () {
-    this.appendDummyInput()
-      .appendField("show working image")
-      .appendField("title")
-      .appendField(new (Blockly as any).FieldTextInput("Processed"), "TITLE");
-    setStatement(this);
-    this.setColour(C_VIOLET);
-    this.setTooltip("Display the image after preprocessing steps.");
-  },
-};
-
-// Before / After
-Blockly.Blocks["m2.before_after"] = {
-  init: function () {
-    this.appendDummyInput().appendField("show before / after");
-    setStatement(this);
-    this.setColour(C_AMBER);
-    this.setTooltip("Compare original vs current working image.");
-  },
-};
-
-// Working shape
-Blockly.Blocks["m2.shape"] = {
-  init: function () {
-    this.appendDummyInput().appendField("show working image shape");
-    setStatement(this);
-    this.setColour(C_AMBER);
-    this.setTooltip("Show (height, width, channels) of the processed image.");
+    appendInfo(
+      this,
+      "This scales all the pixel numbers to a smaller, consistent range so the computer doesn’t get confused by big values.",
+      "ROW",
+      "Normalize pixels"
+    );
   },
 };
 
 // Loop over dataset (no split)
 Blockly.Blocks["m2.loop_dataset"] = {
   init: function () {
-    const sub = new (Blockly as any).FieldDropdown([
-      ["all", "all"],
-      ["first N", "firstN"],
-      ["random N", "randomN"],
-    ], (val: string) => {
-      const blk = sub.getSourceBlock();
-      const nWrap = blk?.getInput("N_WRAP");
-      if (nWrap) {
-        nWrap.setVisible(val !== "all");
-        blk?.render(false);
+    const sub = new (Blockly as any).FieldDropdown(
+      [
+        ["all", "all"],
+        ["first N", "firstN"],
+        ["random N", "randomN"],
+      ],
+      (val: string) => {
+        const blk = sub.getSourceBlock();
+        const nWrap = blk?.getInput("N_WRAP");
+        if (nWrap) {
+          nWrap.setVisible(val !== "all");
+          blk?.render(false);
+        }
+        return val;
       }
-      return val;
-    });
+    );
 
-    this.appendDummyInput()
+    this.appendDummyInput("TITLE")
       .appendField("for each image in dataset")
-      .appendField("subset").appendField(sub, "SUBSET");
+      .appendField("subset")
+      .appendField(sub, "SUBSET");
     this.appendDummyInput("N_WRAP")
       .appendField("N")
       .appendField(new (Blockly as any).FieldNumber(50, 1, 100000, 1), "N");
     this.getInput("N_WRAP")?.setVisible(false);
-    this.appendDummyInput()
+    this.appendDummyInput("S_ROW")
       .appendField("shuffle")
       .appendField(new (Blockly as any).FieldCheckbox("FALSE"), "SHUFFLE");
-    this.appendDummyInput()
+    this.appendDummyInput("K_ROW")
       .appendField("progress every")
       .appendField(new (Blockly as any).FieldNumber(10, 1, 1000, 1), "K")
       .appendField("images");
 
     this.appendStatementInput("DO").appendField("do");
-
     setStatementIO(this);
     this.setColour(C_VIOLET);
-    this.setTooltip("Run the inner steps for every image in the dataset (subset/shuffle optional).");
+    appendInfo(
+      this,
+      "Runs the steps inside for many images. Use this when you’re done designing and want to process the whole set.",
+      "TITLE",
+      "Loop over dataset"
+    );
   },
 };
 
 // Export processed dataset
 Blockly.Blocks["m2.export_dataset"] = {
   init: function () {
-    this.appendDummyInput()
+    this.appendDummyInput("TITLE")
       .appendField("export processed dataset")
       .appendField("name")
       .appendField(new (Blockly as any).FieldTextInput("recyclables-processed"), "NAME");
-
-    this.appendDummyInput()
+    this.appendDummyInput("O_ROW")
       .appendField("overwrite if exists")
       .appendField(new (Blockly as any).FieldCheckbox("FALSE"), "OVERWRITE");
 
     setStatement(this);
     this.setColour(C_VIOLET);
-    this.setTooltip(
-      "Save processed images to a new dataset folder (same format as original) with metadata.json."
+    appendInfo(
+      this,
+      "Saves your cleaned images as a new dataset you can use later. Give it a name you’ll remember!",
+      "TITLE",
+      "Export dataset"
     );
   },
 };
 
-// --- Minimal generators so pythonGenerator doesn't error ---
-pythonGenerator.forBlock["m2.reset_working"] = () => "# m2.reset_working\n";
+/* -------------------------------------------------------------------------
+   Minimal generators so pythonGenerator doesn't error (unchanged behavior)
+   ------------------------------------------------------------------------- */
+pythonGenerator.forBlock["dataset.select"] = () => "# dataset.select\n";
+pythonGenerator.forBlock["dataset.info"] = () => "# dataset.info\n";
+pythonGenerator.forBlock["dataset.class_counts"] = () => "# dataset.class_counts\n";
+pythonGenerator.forBlock["dataset.class_distribution_preview"] = () => "# dataset.class_distribution_preview\n";
+pythonGenerator.forBlock["dataset.sample_image"] = () => "# dataset.sample_image\n";
+pythonGenerator.forBlock["image.show"] = () => "# image.show\n";
+pythonGenerator.forBlock["image.shape"] = () => "# image.shape\n";
+pythonGenerator.forBlock["image.channels_split"] = () => "# image.channels_split\n";
+pythonGenerator.forBlock["image.to_grayscale_preview"] = () => "# image.to_grayscale_preview\n";
+
 pythonGenerator.forBlock["m2.resize"] = () => "# m2.resize\n";
 pythonGenerator.forBlock["m2.crop_center"] = () => "# m2.crop_center\n";
 pythonGenerator.forBlock["m2.pad"] = () => "# m2.pad\n";
@@ -456,9 +565,5 @@ pythonGenerator.forBlock["m2.blur_sharpen"] = () => "# m2.blur_sharpen\n";
 pythonGenerator.forBlock["m2.edges"] = () => "# m2.edges\n";
 pythonGenerator.forBlock["m2.to_grayscale"] = () => "# m2.to_grayscale\n";
 pythonGenerator.forBlock["m2.normalize"] = () => "# m2.normalize\n";
-pythonGenerator.forBlock["m2.show_working"] = () => "# m2.show_working\n";
-pythonGenerator.forBlock["m2.before_after"] = () => "# m2.before_after\n";
-pythonGenerator.forBlock["m2.shape"] = () => "# m2.shape\n";
 pythonGenerator.forBlock["m2.loop_dataset"] = () => "# m2.loop_dataset\n";
 pythonGenerator.forBlock["m2.export_dataset"] = () => "# m2.export_dataset\n";
-
