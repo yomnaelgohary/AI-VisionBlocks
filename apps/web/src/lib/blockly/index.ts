@@ -544,6 +544,88 @@ Blockly.Blocks["m2.export_dataset"] = {
   },
 };
 
+// ---------------- Module 3 Blocks ----------------
+const C_PINK = 320; // Splitting & Bias
+
+// Set split ratio (preview)
+(Blockly as any).Blocks["m3.set_split_ratio"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("set split ratio")
+      .appendField("train %")
+      .appendField(new (Blockly as any).FieldNumber(80, 1, 99, 1), "TRAIN");
+    setStatement(this);
+    this.setColour(C_PINK);
+    appendInfo(
+      this,
+      "Choose how much of the data is for learning (train). The rest is for testing. This only previews the split; to apply it, use the Apply split block.",
+      "ROW",
+      "Set split ratio"
+    );
+  },
+};
+
+// Apply split (instant in-session)
+(Blockly as any).Blocks["m3.apply_split"] = {
+  init: function () {
+    this.appendDummyInput("ROW").appendField("apply split");
+    setStatement(this);
+    this.setColour(C_PINK);
+    appendInfo(
+      this,
+      "Splits the data to trainig and testing sets depending on the ratio used in Set split ratio block. Your original dataset is not changed.",
+      "ROW",
+      "Apply split"
+    );
+  },
+};
+
+// Check training set bias (instant)
+(Blockly as any).Blocks["m3.check_bias_train"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("check training set bias")
+      .appendField("threshold %")
+      .appendField(new (Blockly as any).FieldNumber(10, 1, 50, 1), "THRESH");
+    setStatement(this);
+    this.setColour(C_PINK);
+    appendInfo(
+      this,
+      "Highlights classes in the training set that differ from the average by more than the threshold percent.",
+      "ROW",
+      "Check training bias"
+    );
+  },
+};
+
+// Balance training set (runs on Submit & Run)
+(Blockly as any).Blocks["m3.balance_train"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("balance training set")
+      .appendField("mode")
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["duplicate minority", "duplicate"],
+          ["augment minority", "augment"],
+          ["remove extras", "undersample"],
+        ]),
+        "MODE"
+      )
+      .appendField("target min %")
+      .appendField(new (Blockly as any).FieldNumber(25, 5, 50, 1), "TARGET");
+    setStatement(this);
+    this.setColour(C_PINK);
+    appendInfo(
+      this,
+      "make sure every type of example in your training data gets a fair shot. Choose how you want to balance things out: \n - Remove extras: We toss out some of the extra data to match the smaller groups. \n - Duplicate minority: We duplicate the rare data so we have more copies. \n - Augment minority: We create brand new, realistic examples of the rare data. \nHeads up: This is heavy-lifting for your computer! The magic happens after you hit \"Submit & Run.\"",
+      "ROW",
+      "Balance training set"
+    );
+  },
+};
+
+
 /* -------------------------------------------------------------------------
    Minimal generators so pythonGenerator doesn't error (unchanged behavior)
    ------------------------------------------------------------------------- */
@@ -567,3 +649,9 @@ pythonGenerator.forBlock["m2.to_grayscale"] = () => "# m2.to_grayscale\n";
 pythonGenerator.forBlock["m2.normalize"] = () => "# m2.normalize\n";
 pythonGenerator.forBlock["m2.loop_dataset"] = () => "# m2.loop_dataset\n";
 pythonGenerator.forBlock["m2.export_dataset"] = () => "# m2.export_dataset\n";
+
+// minimal python stubs
+pythonGenerator.forBlock["m3.set_split_ratio"] = () => "# m3.set_split_ratio\n";
+pythonGenerator.forBlock["m3.apply_split"] = () => "# m3.apply_split\n";
+pythonGenerator.forBlock["m3.check_bias_train"] = () => "# m3.check_bias_train\n";
+pythonGenerator.forBlock["m3.balance_train"] = () => "# m3.balance_train\n";
