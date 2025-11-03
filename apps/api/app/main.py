@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routes import health, datasets, preprocess
+from app.routes import health, datasets, preprocess, split
 from app.services.datasets import get_datasets_index
 
 app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION)
@@ -20,6 +20,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(datasets.router)
 app.include_router(preprocess.router)  
+app.include_router(split.router)  
 
 @app.on_event("startup")
 def _warmup():
