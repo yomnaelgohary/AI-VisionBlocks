@@ -1,3 +1,4 @@
+// apps/web/src/app/module3/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -9,6 +10,7 @@ import BaymaxPanel from "@/components/BaymaxPanel";
 import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 import InfoModal from "@/components/InfoModal";
 import MissionChecklistM3 from "@/components/MissionChecklistM3";
+import SubmissionModal from "@/components/SubmissionModal";
 
 const API_BASE = "http://localhost:8000";
 
@@ -136,6 +138,12 @@ export default function Module3Page() {
   const [infoTitle, setInfoTitle] = useState<string | undefined>();
   const [infoText, setInfoText] = useState<string | undefined>();
 
+  // Submission modal (NEW)
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [submitLines, setSubmitLines] = useState<string[]>([]);
+  const [submitTitle, setSubmitTitle] = useState("Mission Result");
+
   // Mission progress
   const [progress, setProgress] = useState({
     datasetSelected: false,
@@ -179,7 +187,7 @@ export default function Module3Page() {
 
     const tops = ws.getTopBlocks(true) as BlocklyBlock[];
 
-    // If any dataset.select exists anywhere, mark selected = true (the chain check still applies when running APIs)
+    // Any dataset.select anywhere toggles the headline “dataset selected”
     datasetSelected = tops.some((top) => {
       for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
         if (b.type === "dataset.select") return true;
@@ -325,6 +333,25 @@ export default function Module3Page() {
     setBaymaxLine("Up to date!");
   };
 
+  /** Build submission message based on current mission state. */
+  function evaluateMissionM3(p: typeof progress) {
+    const lines: string[] = [];
+    let ok = true;
+
+    if (!p.datasetSelected) { ok = false; lines.push("• Select a dataset with the 'use dataset' block."); }
+    if (!p.splitPreviewed)   { ok = false; lines.push("• Use 'set split ratio (preview)' to see train/test counts."); }
+    if (!p.splitApplied)     { ok = false; lines.push("• Add 'apply split' to make the split active for this session."); }
+    if (!p.biasChecked)      { ok = false; lines.push("• Check training set bias to spot imbalance."); }
+    if (!p.balanced)         { ok = false; lines.push("• Balance the training set (Submit & Run)."); }
+
+    if (ok) {
+      lines.unshift("Great work! You previewed, applied, checked bias, and balanced the training set.");
+    } else {
+      lines.unshift("Not quite there yet—here’s what to finish:");
+    }
+    return { ok, lines, title: ok ? "Mission Complete!" : "Keep Going: Almost There" };
+  }
+
   const submitAndRun = async () => {
     const ws = workspaceRef.current;
     if (!ws) return;
@@ -346,6 +373,11 @@ export default function Module3Page() {
 
       if (!target) {
         setLogs([{ kind: "warn", text: "Connect a 'balance training set' block to a chain with 'use dataset'." }]);
+        const evalRes = evaluateMissionM3(progress);
+        setSubmitSuccess(false);
+        setSubmitLines(evalRes.lines);
+        setSubmitTitle("Submission Error");
+        setSubmitOpen(true);
         return;
       }
 
@@ -392,9 +424,21 @@ export default function Module3Page() {
       ]);
       setProgress((p) => ({ ...p, balanced: true }));
       setBaymaxLine("Training set looks fairer now!");
+
+      // Show mission modal
+      const evalRes = evaluateMissionM3({ ...progress, balanced: true });
+      setSubmitSuccess(evalRes.ok);
+      setSubmitLines(evalRes.lines);
+      setSubmitTitle(evalRes.title);
+      setSubmitOpen(true);
     } catch (e: any) {
       setLogs([{ kind: "error", text: `Submit failed: ${e?.message || String(e)}` }]);
       setBaymaxLine("Hmm, something went wrong—check the blocks.");
+      const evalRes = evaluateMissionM3(progress);
+      setSubmitSuccess(false);
+      setSubmitLines(["An error occurred while balancing.", ...evalRes.lines]);
+      setSubmitTitle("Submission Error");
+      setSubmitOpen(true);
     } finally {
       setRunning(false);
     }
@@ -473,7 +517,7 @@ export default function Module3Page() {
     >
       {/* Top bar */}
       <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>VisionBlocks — Module 3: Splitting & Bias</div>
+        <div className={`font-semibold ${barText}`}>VisionBlocks | Module 3: Splitting & Bias</div>
         <div className="flex gap-2 items-center">
           <button
             onClick={() => refreshDatasets(workspaceRef.current)}
@@ -524,6 +568,16 @@ export default function Module3Page() {
         text={infoText}
         dark={dark}
         onClose={() => setInfoOpen(false)}
+      />
+
+      {/* Submission result modal */}
+      <SubmissionModal
+        open={submitOpen}
+        onClose={() => setSubmitOpen(false)}
+        dark={dark}
+        title={submitTitle}
+        lines={submitLines}
+        success={submitSuccess}
       />
     </div>
   );
