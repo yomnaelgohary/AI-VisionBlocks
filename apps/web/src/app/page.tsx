@@ -50,7 +50,7 @@ export default function HomePage() {
         <h1 className={`text-2xl font-bold ${barText}`}>Welcome to VisionBlocks</h1>
         <p className={`mt-2 ${subText}`}>Pick any module to begin.</p>
 
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           <Link href="/module1" className={`rounded-xl border ${cardBg} p-4 hover:opacity-95`}>
             <div className={`${barText} text-lg font-semibold`}>Module 1: Learn to See</div>
             <p className={`${subText} mt-1 text-sm`}>
@@ -69,6 +69,13 @@ export default function HomePage() {
             <div className={`${barText} text-lg font-semibold`}>Module 3: Splitting & Bias</div>
             <p className={`${subText} mt-1 text-sm`}>
               Create a train/test split, check training-set bias, and balance classes.
+            </p>
+          </Link>
+
+          <Link href="/module4" className={`rounded-xl border ${cardBg} p-4 hover:opacity-95`}>
+            <div className={`${barText} text-lg font-semibold`}>Module 4: Model</div>
+            <p className={`${subText} mt-1 text-sm`}>
+              Build a simple CNN with blocks, train it, evaluate, and predict a sample.
             </p>
           </Link>
         </div>

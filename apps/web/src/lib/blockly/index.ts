@@ -544,7 +544,9 @@ Blockly.Blocks["m2.export_dataset"] = {
   },
 };
 
-// ---------------- Module 3 Blocks ----------------
+/* =========================================================================
+   Module 3 Blocks 
+   ========================================================================= */
 const C_PINK = 320; // Splitting & Bias
 
 // Set split ratio (preview)
@@ -625,6 +627,197 @@ const C_PINK = 320; // Splitting & Bias
   },
 };
 
+/* =========================================================================
+   Module 4 Blocks 
+   ========================================================================= */
+
+const C_PURPLE = 265; // Model
+const C_CYAN = 190;   // Training
+const C_AMBER4 = 40;  // Evaluation
+
+// ---------------- Model ----------------
+
+// Model init (name only; input size & #classes will be auto-checked by backend later)
+(Blockly as any).Blocks["m4.model_init"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("start new model")
+      .appendField("name")
+      .appendField(new (Blockly as any).FieldTextInput("my-model"), "NAME");
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Begins your model. We’ll figure out the right input size and how many classes from your dataset.",
+      "ROW",
+      "Start new model"
+    );
+  },
+};
+
+// Conv layer (abstract strength)
+(Blockly as any).Blocks["m4.layer_conv2d"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("add conv layer")
+      .appendField("strength")
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["Light", "light"],   // e.g., 16 filters
+          ["Medium", "medium"], // 32
+          ["Strong", "strong"], // 64
+        ]),
+        "STRENGTH"
+      );
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "A convolutional layer helps the model notice shapes and patterns. Strength chooses how many filters to learn.",
+      "ROW",
+      "Convolution layer"
+    );
+  },
+};
+
+// Pooling layer (2×2)
+(Blockly as any).Blocks["m4.layer_pool"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("add pooling layer")
+      .appendField("type")
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["Max", "max"],
+          ["Average", "avg"],
+        ]),
+        "TYPE"
+      );
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Pooling shrinks the image gently so the model focuses on the big picture.",
+      "ROW",
+      "Pooling"
+    );
+  },
+};
+
+// Dense layer (abstract size)
+(Blockly as any).Blocks["m4.layer_dense"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("add dense layer")
+      .appendField("size")
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["Small", "small"],   // 64
+          ["Medium", "medium"], // 128
+          ["Large", "large"],   // 256
+        ]),
+        "SIZE"
+      );
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Dense layers mix all the learned features to decide the final answer.",
+      "ROW",
+      "Dense layer"
+    );
+  },
+};
+
+// Model summary (instant card)
+(Blockly as any).Blocks["m4.model_summary"] = {
+  init: function () {
+    this.appendDummyInput("ROW").appendField("show model summary");
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Shows the stack of layers you built and the shapes flowing through it.",
+      "ROW",
+      "Model summary"
+    );
+  },
+};
+
+// ---------------- Training ----------------
+
+(Blockly as any).Blocks["m4.train_hparams"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("training setup")
+      .appendField("epochs")
+      .appendField(new (Blockly as any).FieldNumber(5, 1, 10, 1), "EPOCHS")
+      .appendField("batch")
+      .appendField(
+        new (Blockly as any).FieldDropdown([
+          ["Small (16)", "16"],
+          ["Medium (32)", "32"],
+          ["Large (64)", "64"],
+        ]),
+        "BATCH"
+      );
+    setStatement(this);
+    this.setColour(C_CYAN);
+    appendInfo(
+      this,
+      "How many rounds to learn (epochs), and how many pictures at a time (batch size).",
+      "ROW",
+      "Training setup"
+    );
+  },
+};
+
+(Blockly as any).Blocks["m4.train_start"] = {
+  init: function () {
+    this.appendDummyInput("ROW").appendField("start training");
+    setStatement(this);
+    this.setColour(C_CYAN);
+    appendInfo(
+      this,
+      "Begins learning on the training set and shows your accuracy improving.",
+      "ROW",
+      "Start training"
+    );
+  },
+};
+
+// ---------------- Evaluation ----------------
+
+(Blockly as any).Blocks["m4.eval_test"] = {
+  init: function () {
+    this.appendDummyInput("ROW").appendField("evaluate on test set");
+    setStatement(this);
+    this.setColour(C_AMBER4);
+    appendInfo(
+      this,
+      "Checks how well your model does on unseen images. Shows accuracy and per-class results.",
+      "ROW",
+      "Evaluate on test"
+    );
+  },
+};
+
+(Blockly as any).Blocks["m4.predict_sample"] = {
+  init: function () {
+    this.appendDummyInput("ROW").appendField("predict current sample");
+    setStatement(this);
+    this.setColour(C_AMBER4);
+    appendInfo(
+      this,
+      "Takes the sample image you picked and asks the model to guess its class.",
+      "ROW",
+      "Predict sample"
+    );
+  },
+};
+
+
+
 
 /* -------------------------------------------------------------------------
    Minimal generators so pythonGenerator doesn't error (unchanged behavior)
@@ -650,8 +843,17 @@ pythonGenerator.forBlock["m2.normalize"] = () => "# m2.normalize\n";
 pythonGenerator.forBlock["m2.loop_dataset"] = () => "# m2.loop_dataset\n";
 pythonGenerator.forBlock["m2.export_dataset"] = () => "# m2.export_dataset\n";
 
-// minimal python stubs
 pythonGenerator.forBlock["m3.set_split_ratio"] = () => "# m3.set_split_ratio\n";
 pythonGenerator.forBlock["m3.apply_split"] = () => "# m3.apply_split\n";
 pythonGenerator.forBlock["m3.check_bias_train"] = () => "# m3.check_bias_train\n";
 pythonGenerator.forBlock["m3.balance_train"] = () => "# m3.balance_train\n";
+
+pythonGenerator.forBlock["m4.model_init"] = () => "# m4.model_init\n";
+pythonGenerator.forBlock["m4.layer_conv2d"] = () => "# m4.layer_conv2d\n";
+pythonGenerator.forBlock["m4.layer_pool"] = () => "# m4.layer_pool\n";
+pythonGenerator.forBlock["m4.layer_dense"] = () => "# m4.layer_dense\n";
+pythonGenerator.forBlock["m4.model_summary"] = () => "# m4.model_summary\n";
+pythonGenerator.forBlock["m4.train_hparams"] = () => "# m4.train_hparams\n";
+pythonGenerator.forBlock["m4.train_start"] = () => "# m4.train_start\n";
+pythonGenerator.forBlock["m4.eval_test"] = () => "# m4.eval_test\n";
+pythonGenerator.forBlock["m4.predict_sample"] = () => "# m4.predict_sample\n";
