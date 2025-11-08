@@ -1,6 +1,5 @@
 import * as BlocklyNS from "blockly/core";
 import * as BlocklyPython from "blockly/python";
-import "blockly/blocks";
 
 export const Blockly = BlocklyNS;
 export const pythonGenerator = BlocklyPython.pythonGenerator as any;
