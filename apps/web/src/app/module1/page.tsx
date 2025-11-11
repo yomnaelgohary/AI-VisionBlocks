@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkspaceSvg, Block as BlocklyBlock } from "blockly";
 import { Blockly } from "@/lib/blockly";
-import { toolboxJson } from "@/components/toolbox";
+import { toolboxJson } from "@/components/Toolbox";
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
 import BaymaxPanel from "@/components/BaymaxPanel";
 import { DarkTheme, LightTheme } from "@/lib/blockly/theme";

@@ -106,6 +106,11 @@ function walkConnectedChainFrom(top: BlocklyBlock | null): string[] {
   return seq;
 }
 
+function findBlockByTypeInChain(top: BlocklyBlock | null, type: string): BlocklyBlock | null {
+  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) if (b.type === type) return b;
+  return null;
+}
+
 /* ----------------- main component ----------------- */
 
 export default function StageRunner({ stageId }: { stageId: string }) {
@@ -163,14 +168,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     window.addEventListener("vb:blockInfo", onInfo as any);
 
     const onChange = () => {
-      setTimeout(() => {
-        if (stage?.type === "pipeline") previewPipeline().catch(() => {});
-        buildChecklist(); // tri-state per stage
-      }, 250);
+      setTimeout(async () => {
+        if (stage?.type === "pipeline") await previewPipeline().catch(() => {});
+        setCheckItems(computeChecklist(ws, stage));
+      }, 200);
     };
     ws.addChangeListener(onChange);
 
-    buildChecklist();
+    // initial checklist
+    setCheckItems(computeChecklist(ws, stage));
 
     return () => {
       window.removeEventListener("vb:blockInfo", onInfo as any);
@@ -185,6 +191,19 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   }, [dark]);
 
   /* ----------- core: preview & target generation ----------- */
+
+  // New: read dataset key without needing a sample image (Stage 7 needs this)
+  function ensureDatasetKey(ws: WorkspaceSvg) {
+    let dsKey: string | null = null;
+    const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
+    for (const b of blocks) {
+      if (b.type === "dataset.select") {
+        dsKey = b.getFieldValue("DATASET");
+        break;
+      }
+    }
+    if (dsKey) datasetKeyRef.current = dsKey;
+  }
 
   async function ensureSample(ws: WorkspaceSvg): Promise<void> {
     let dsKey: string | null = null;
@@ -201,6 +220,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         }
       }
     }
+
+    // Always set dataset key if found, even if no sample block exists
+    if (dsKey) datasetKeyRef.current = dsKey;
     if (!dsKey || !mode) return;
 
     const needFetch =
@@ -214,9 +236,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }`;
       const sample = await fetchJSON<SampleResp>(url);
       sampleRef.current = sample;
-      datasetKeyRef.current = dsKey;
 
-      // create dynamic target for pipeline stages
+      // dynamic target for pipeline stages
       if (stage?.type === "pipeline" && stage.targetOps) {
         const tgt = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
           method: "POST",
@@ -268,102 +289,153 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
 
-  function triStateFor(blockType: string, where: "pipeline" | "loop", orderOK: boolean, present: boolean): Tri {
-    if (!present) return "missing";
-    if (!orderOK) return "wrong_place";
-    return "ok";
+  // Parameter validator against stage.targetOps
+  function paramMismatch(block: BlocklyBlock | null, spec?: OpSpec): boolean {
+    if (!block || !spec) return false;
+
+    if (spec.type === "resize") {
+      const mode = block.getFieldValue("MODE");
+
+      // Accept either:
+      // - fit with maxside=150
+      // - size + keep=TRUE with either side == 150 (toward-150 rule)
+      if (mode === "fit") {
+        const ms = Number(block.getFieldValue("MAXSIDE") || 0);
+        return ms !== 150; // strict for this curriculum
+      }
+
+      if (mode === "size") {
+        const keepRaw = block.getFieldValue("KEEP");
+        const keep = String(keepRaw || "FALSE").toUpperCase() === "TRUE";
+        const w = Number(block.getFieldValue("W") || 0);
+        const h = Number(block.getFieldValue("H") || 0);
+        // "towards 150": keep aspect and at least one side equals 150
+        if (keep && (w === 150 || h === 150)) return false;
+        return true;
+      }
+
+      // other modes not accepted for these stages
+      return true;
+    }
+
+    if (spec.type === "pad") {
+      const w = Number(block.getFieldValue("W") || 0);
+      const h = Number(block.getFieldValue("H") || 0);
+      return !(w === 150 && h === 150);
+    }
+
+    if (spec.type === "normalize") {
+      // If stage specifies a mode, enforce it; otherwise accept any
+      if ((spec as any).mode) {
+        const m = block.getFieldValue("MODE");
+        return m !== (spec as any).mode;
+      }
+      return false;
+    }
+
+    // Other blocks: no strict parameter enforcement in these stages
+    return false;
   }
 
-  function buildChecklist() {
-    const ws = workspaceRef.current;
-    if (!ws || !stage) return;
-
+  function computeChecklist(ws: WorkspaceSvg, s: StageConfig): StageChecklistItem[] {
     const items: StageChecklistItem[] = [];
-    const topPipeline = findFirstPipelineTop(ws);
 
-    const connectedOrder = topPipeline ? walkConnectedChainFrom(topPipeline) : [];
+    if (s.type === "pipeline") {
+      const topPipeline = findFirstPipelineTop(ws);
+      const connectedOrder = topPipeline ? walkConnectedChainFrom(topPipeline) : [];
 
-    if (stage.type === "pipeline") {
-      // must start with dataset.select -> dataset.sample_image
-      const expected = stage.expectedOrder || [];
-      // Presence map
-      const presentMap = new Map<string, boolean>();
-      for (const t of expected) presentMap.set(t, connectedOrder.includes(t));
+      const expected = s.expectedOrder || [];
+      // presence & order maps
+      const present = new Map<string, boolean>();
+      expected.forEach(t => present.set(t, connectedOrder.includes(t)));
 
-      // order check: we ensure the relative order equals expected subsequence
-      let orderOKMap = new Map<string, boolean>();
+      const orderOK = new Map<string, boolean>();
       if (expected.length > 0) {
         let pos = -1;
         for (const t of expected) {
           const i = connectedOrder.indexOf(t);
           const ok = i !== -1 && i > pos;
-          orderOKMap.set(t, ok);
+          orderOK.set(t, ok);
           if (ok) pos = i;
         }
       }
 
-      // Build items for requiredBlocks (excluding dataset.* from display; we still enforce them logically)
-      (stage.requiredBlocks || []).forEach((t) => {
-        const present = !!presentMap.get(t);
-        const okOrder = !!orderOKMap.get(t);
+      (s.requiredBlocks || []).forEach((t) => {
+        const inChain = !!present.get(t);
+        const okOrder = !!orderOK.get(t);
+
+        // parameter-level check (only if block present)
+        let paramOK = true;
+        if (inChain && s.targetOps) {
+          const spec = s.targetOps.find(o => "m2." + o.type === t);
+          const blk = findBlockByTypeInChain(topPipeline, t);
+          if (spec && blk) paramOK = !paramMismatch(blk, spec);
+        }
+
+        let state: Tri = "missing";
+        if (inChain) {
+          if (!okOrder || !paramOK) state = "wrong_place";
+          else state = "ok";
+        }
+
         items.push({
           key: t,
           label: t.replace("m2.", "").replaceAll("_", " "),
-          state: triStateFor(t, "pipeline", okOrder, present),
+          state,
         });
       });
-    } else {
-      // dataset stage: everything must be inside loop.DO in expected order; export after loop
-      const tops = ws.getTopBlocks(true) as BlocklyBlock[];
-      let loopBlock: BlocklyBlock | null = null;
-      for (const t of tops) {
-        if (t.type === "m2.loop_dataset") { loopBlock = t; break; }
-      }
 
+    } else {
+      // -------- Stage 7: loop + export --------
+      // IMPORTANT: loop may not be a top block (it’s often chained after dataset.select)
+      const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
+      const loopBlock = allBlocks.find(b => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
+
       const innerOrder = loopInner ? walkConnectedChainFrom(loopInner) : [];
 
-      const required = stage.requiredBlocksWithinLoop || [];
-      const expected = stage.expectedOrderWithinLoop || required;
+      const required = s.requiredBlocksWithinLoop || [];
+      const expected = s.expectedOrderWithinLoop || required;
 
       // presence & order inside loop
-      const presentMap = new Map<string, boolean>();
-      required.forEach(bt => presentMap.set(bt, innerOrder.includes(bt)));
+      const present = new Map<string, boolean>();
+      required.forEach(bt => present.set(bt, innerOrder.includes(bt)));
 
-      let orderOKMap = new Map<string, boolean>();
+      const orderOK = new Map<string, boolean>();
       if (expected.length > 0) {
         let pos = -1;
         for (const t of expected) {
           const i = innerOrder.indexOf(t);
           const ok = i !== -1 && i > pos;
-          orderOKMap.set(t, ok);
+          orderOK.set(t, ok);
           if (ok) pos = i;
         }
       }
 
       required.forEach((t) => {
-        const present = !!presentMap.get(t);
-        const okOrder = !!orderOKMap.get(t);
+        const inLoop = !!present.get(t);
+        const ok = !!orderOK.get(t);
+        const state = !inLoop ? "missing" : ok ? "ok" : "wrong_place";
         items.push({
           key: t,
           label: `${t.replace("m2.", "").replaceAll("_", " ")} (inside loop)`,
-          state: triStateFor(t, "loop", okOrder, present),
+          state,
         });
       });
 
-      // export after loop
+      // export dataset after loop
       let exportState: Tri = "missing";
       if (loopBlock) {
         let cur: BlocklyBlock | null = loopBlock.getNextBlock();
         while (cur && cur.type !== "m2.export_dataset") cur = cur.getNextBlock();
-        exportState = cur ? "ok" : "missing";
+        if (cur) exportState = "ok";
       }
-      if (stage.requireExportAfterLoop) {
+      if (s.requireExportAfterLoop) {
         items.push({ key: "m2.export_dataset", label: "export dataset (after loop)", state: exportState });
       }
     }
 
-    setCheckItems(items);
+    return items;
   }
 
   /* ----------- submit/run ----------- */
@@ -374,6 +446,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
     try {
       const ws = workspaceRef.current;
+      // Ensure we at least have the dataset key (Stage 7 may not have a sample block)
+      ensureDatasetKey(ws);
       await ensureSample(ws);
 
       const newLogs: LogItem[] = [];
@@ -382,7 +456,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
       if (stage.type === "pipeline") {
         const top = findFirstPipelineTop(ws);
-        if (!top || !sampleRef.current || !datasetKeyRef.current) {
+        if (!top || !datasetKeyRef.current || !sampleRef.current) {
           ok = false;
           lines.push("• Make sure the dataset & sample blocks are connected to a preprocessing chain.");
         } else {
@@ -398,22 +472,17 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           });
           setCurrentSrc(resp.after_data_url);
 
-          // Evaluate checklist
-          buildChecklist();
-          const allOk = checkItems.every(i => i.state === "ok");
-          ok = ok && allOk;
+          const itemsNow = computeChecklist(ws, stage);
+          setCheckItems(itemsNow);
+          ok = ok && itemsNow.every(i => i.state === "ok");
 
-          if (ok) {
-            lines.push("✓ All required blocks used in the correct order.");
-          } else {
-            lines.push("• Some items are missing or out of order (marked with “–” or “???”).");
-          }
+          if (ok) lines.push("✓ All required blocks used in the correct order (with correct settings).");
+          else lines.push("• Some items are missing, out of order, or have incorrect settings (marked with “–” or “???”).");
         }
       } else {
         // Stage 7 — dataset-wide
-        const tops = ws.getTopBlocks(true) as BlocklyBlock[];
-        let loopBlock: BlocklyBlock | null = null;
-        for (const t of tops) if (t.type === "m2.loop_dataset") loopBlock = t;
+        const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
+        const loopBlock = allBlocks.find(b => b.type === "m2.loop_dataset") || null;
 
         if (!loopBlock) {
           ok = false; lines.push("• Add the loop block and put the preprocessing pipeline inside it.");
@@ -421,7 +490,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           const inner = loopBlock.getInputTargetBlock("DO");
           const ops = blocksToOps(inner);
 
-          // Find export after loop
+          // Export block after loop
           let cur: BlocklyBlock | null = loopBlock.getNextBlock();
           let exportBlock: BlocklyBlock | null = null;
           while (cur) {
@@ -429,14 +498,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
             cur = cur.getNextBlock();
           }
 
-          // Evaluate structure
-          buildChecklist();
-          const structureOK = checkItems.every(i => i.key === "m2.export_dataset" ? i.state === "ok" : i.state === "ok");
+          // Evaluate structure synchronously
+          const itemsNow = computeChecklist(ws, stage);
+          setCheckItems(itemsNow);
+          const structureOK = itemsNow.every(i => i.state === "ok");
           ok = ok && structureOK;
 
-          if (ok && datasetKeyRef.current) {
-            const newName = exportBlock?.getFieldValue("NAME") || "processed";
-            const overwrite = exportBlock?.getFieldValue("OVERWRITE") === "TRUE";
+          if (ok && datasetKeyRef.current && exportBlock) {
+            const newName = exportBlock.getFieldValue("NAME") || "processed";
+            const overwrite = exportBlock.getFieldValue("OVERWRITE") === "TRUE";
 
             // Subset config
             const subsetMode = loopBlock.getFieldValue("SUBSET");
@@ -464,9 +534,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
                 `Classes: ${resp.classes.join(", ") || "(none)"}`,
               ],
             });
-          } else {
+          } else if (!structureOK) {
             ok = false;
-            lines.push("• Fix the checklist items (pipeline must be inside loop; export after loop).");
+            lines.push("• Fix the checklist items (pipeline must be inside loop; correct order; export after loop).");
+          } else if (!datasetKeyRef.current) {
+            ok = false;
+            lines.push("• Add a 'use dataset' block so I know which dataset to process.");
+          } else if (!exportBlock) {
+            ok = false;
+            lines.push("• Add 'export processed dataset' after the loop.");
           }
         }
       }
@@ -476,7 +552,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       setSubmitLines(lines);
       setSubmitOpen(true);
       setLogs((prev) => [...prev, ...newLogs]);
-      setBaymax(ok ? "Great job! That pipeline looks perfect. 🎉" : "Try reordering blocks until the checklist turns green.");
+      setBaymax(ok ? "Great job! That pipeline looks perfect. 🎉" : "Try reordering blocks or adjusting settings until the checklist turns green.");
     } catch (e: any) {
       setSubmitSuccess(false);
       setSubmitTitle("Error");
