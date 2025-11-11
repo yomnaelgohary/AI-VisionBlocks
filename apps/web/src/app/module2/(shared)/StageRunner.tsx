@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { WorkspaceSvg, Block as BlocklyBlock } from "blockly";
 import { Blockly } from "@/lib/blockly";
 import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
@@ -158,10 +159,18 @@ function findBlockByTypeInChain(
 /* ----------------- Component ----------------- */
 
 export default function StageRunner({ stageId }: { stageId: string }) {
+  const router = useRouter();
+
   const stage: StageConfig | undefined = useMemo(
     () => module2Stages.find((s) => String(s.id) === String(stageId)),
     [stageId]
   );
+
+  const currentIndex = useMemo(
+    () => module2Stages.findIndex((s) => String(s.id) === String(stageId)),
+    [stageId]
+  );
+  const nextStage = currentIndex >= 0 ? module2Stages[currentIndex + 1] : undefined;
 
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
@@ -180,13 +189,16 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [submitLines, setSubmitLines] = useState<string[]>([]);
   const [submitSuccess, setSubmitSuccess] = useState(false);
 
+  // last successful completion toggle (enables Next Stage)
+  const [canGoNext, setCanGoNext] = useState(false);
+
   const sampleRef = useRef<SampleResp | null>(null);
   const datasetKeyRef = useRef<string | null>(null);
 
   const [targetSrc, setTargetSrc] = useState<string>();
   const [currentSrc, setCurrentSrc] = useState<string>();
 
-  // NEW: debounce/thrash control
+  // debounce/thrash control
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const genTokenRef = useRef(0);
   const lastCtxSigRef = useRef<string>("");
@@ -202,6 +214,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     genTokenRef.current++;
     setTargetSrc(undefined);
     setCurrentSrc(undefined);
+    setCanGoNext(false); // new stage => must complete again
 
     const ws = Blockly.inject(blocklyDivRef.current!, {
       toolbox: toolboxJsonModule2,
@@ -254,7 +267,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   /* ---------- dataset/sample helpers ---------- */
 
-  // Always pick up dataset key if present anywhere
   function ensureDatasetKey(ws: WorkspaceSvg) {
     const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
     for (const b of blocks) {
@@ -265,8 +277,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     }
   }
 
-  // Only fetch a sample when the sample block is CONNECTED after a dataset
-  // block in the same top chain. Avoids random-mode thrash while dragging.
+  // Only fetch a sample when sample block is connected after dataset in same chain
   async function ensureSample(ws: WorkspaceSvg): Promise<void> {
     let foundDsKey: string | null = null;
     let foundSample: { mode: "random" | "index"; index?: number } | null = null;
@@ -296,7 +307,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       if (foundDsKey && foundSample) break;
     }
 
-    // keep dataset reference even if no sample block (needed by Stage 7)
     ensureDatasetKey(ws);
 
     if (!foundDsKey || !foundSample) return;
@@ -325,6 +335,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     datasetKeyRef.current = foundDsKey;
     sampleRef.current = sample;
 
+    // show unprocessed current image immediately
+    setCurrentSrc(sample.image_data_url);
+
     // Build target (pipeline stages only)
     if (stage?.type === "pipeline" && stage.targetOps) {
       const tgt = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
@@ -350,7 +363,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     return null;
   }
 
-  // Debounced preview that also drops stale results
   async function previewPipelineDebounced() {
     const ws = workspaceRef.current;
     if (!ws || !stage) return;
@@ -368,7 +380,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       const ops = blocksToOps(top);
       const ctxSig = JSON.stringify({
         ds: datasetKeyRef.current,
-        samplePath: sampleRef.current.path, // pins exact random pick
+        samplePath: sampleRef.current.path,
         ops,
       });
       if (ctxSig === lastCtxSigRef.current) return;
@@ -398,21 +410,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
 
-  // Parameter validation for a few ops used in stages
   function paramMismatch(block: BlocklyBlock | null, spec?: OpSpec): boolean {
     if (!block || !spec) return false;
 
     if (spec.type === "resize") {
       const mode = block.getFieldValue("MODE");
-
-      // Accept EITHER:
-      // - fit with maxside=150
-      // - size with keep=TRUE and (w==150 || h==150)
       if (mode === "fit") {
         const ms = Number(block.getFieldValue("MAXSIDE") || 0);
         return ms !== 150;
       }
-
       if (mode === "size") {
         const keepRaw = block.getFieldValue("KEEP");
         const keep = String(keepRaw || "FALSE").toUpperCase() === "TRUE";
@@ -421,8 +427,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         if (keep && (w === 150 || h === 150)) return false;
         return true;
       }
-
-      return true; // other modes not accepted for these resize stages
+      return true;
     }
 
     if (spec.type === "pad") {
@@ -468,7 +473,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const inChain = !!present.get(t);
         const okOrder = !!orderOK.get(t);
 
-        // param check (if targetOps specify it)
         let paramOK = true;
         if (inChain && s.targetOps) {
           const spec = s.targetOps.find((o) => "m2." + o.type === t);
@@ -489,7 +493,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         });
       });
     } else {
-      // Stage 7 (loop inside, export after)
+      // Stage 7
       const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
       const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
@@ -560,9 +564,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const top = findFirstPipelineTop(ws);
         if (!top || !datasetKeyRef.current || !sampleRef.current) {
           ok = false;
-          lines.push(
-            "• Make sure the dataset & sample blocks are connected to a preprocessing chain."
-          );
+          lines.push("• Make sure the dataset & sample blocks are connected to a preprocessing chain.");
         } else {
           const ops = blocksToOps(top);
           const resp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
@@ -580,20 +582,13 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           setCheckItems(itemsNow);
           ok = ok && itemsNow.every((i) => i.state === "ok");
 
-          if (ok)
-            lines.push(
-              "✓ All required blocks used in the correct order (with correct settings)."
-            );
-          else
-            lines.push(
-              "• Some items are missing, out of order, or have incorrect settings (marked with “–” or “???”)."
-            );
+          if (ok) lines.push("✓ All required blocks used in the correct order. Great job!");
+          else lines.push("• Some items are missing, out of order, or have incorrect settings (Blocks in the wrong order or with incorrect settings are marked with “–”).");
         }
       } else {
         // Stage 7
         const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
-        const loopBlock =
-          allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
+        const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
 
         if (!loopBlock) {
           ok = false;
@@ -626,39 +621,35 @@ export default function StageRunner({ stageId }: { stageId: string }) {
             const N = Number(loopBlock.getFieldValue("N") || 0);
             const shuffle = loopBlock.getFieldValue("SHUFFLE") === "TRUE";
 
-            const resp = await fetchJSON<ExportResp>(
-              `${API_BASE}/preprocess/batch_export`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  dataset_key: datasetKeyRef.current,
-                  subset: {
-                    mode: subsetMode,
-                    n: subsetMode === "all" ? null : N,
-                    shuffle,
-                  },
-                  ops,
-                  new_dataset_name: newName,
-                  overwrite,
-                }),
-              }
-            );
-
-            newLogs.push({
-              kind: "card",
-              title: "Export Complete",
-              lines: [
-                `New dataset: ${resp.new_dataset_key}`,
-                `Images processed: ${resp.processed}`,
-                `Classes: ${resp.classes.join(", ") || "(none)"}`,
-              ],
+            const resp = await fetchJSON<ExportResp>(`${API_BASE}/preprocess/batch_export`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                dataset_key: datasetKeyRef.current,
+                subset: {
+                  mode: subsetMode,
+                  n: subsetMode === "all" ? null : N,
+                  shuffle,
+                },
+                ops,
+                new_dataset_name: newName,
+                overwrite,
+              }),
             });
+
+          newLogs.push({
+            kind: "card",
+            title: "Export Complete",
+            lines: [
+              `New dataset: ${resp.new_dataset_key}`,
+              `Images processed: ${resp.processed}`,
+              `Classes: ${resp.classes.join(", ") || "(none)"}`,
+            ],
+          });
+
           } else if (!structureOK) {
             ok = false;
-            lines.push(
-              "• Fix the checklist items (pipeline must be inside loop; correct order; export after loop)."
-            );
+            lines.push("• Fix the checklist items (pipeline must be inside loop; correct order; export after loop).");
           } else if (!datasetKeyRef.current) {
             ok = false;
             lines.push("• Add a 'use dataset' block so I know which dataset to process.");
@@ -670,22 +661,34 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }
 
       setSubmitSuccess(ok);
+      setCanGoNext(ok); // enable Next Stage on success
       setSubmitTitle(ok ? "Stage Complete!" : "Keep Going");
       setSubmitLines(lines);
       setSubmitOpen(true);
       setLogs((prev) => [...prev, ...newLogs]);
-      setBaymax(
-        ok
-          ? "Great job! That pipeline looks perfect. 🎉"
-          : "Try reordering blocks or adjusting settings until the checklist turns green."
-      );
+      setBaymax(ok ? "Great job! That pipeline looks perfect. 🎉" : "Try reordering blocks or adjusting settings until the checklist turns green.");
     } catch (e: any) {
       setSubmitSuccess(false);
+      setCanGoNext(false);
       setSubmitTitle("Error");
       setSubmitLines([e?.message || String(e)]);
       setSubmitOpen(true);
     } finally {
       setRunning(false);
+    }
+  }
+
+  /* ---------- Navigation helpers ---------- */
+  function goModuleHome() {
+    router.push("/module2");
+  }
+
+  function goNext() {
+    if (nextStage) {
+      router.push(`/module2/${nextStage.id}`);
+    } else {
+      // no next stage → back to module home
+      router.push("/module2");
     }
   }
 
@@ -711,6 +714,20 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
         <div className={`font-semibold ${barText}`}>VisionBlocks — Module 2: {stage.title}</div>
         <div className="flex gap-2 items-center">
+          {/* Module 2 main page */}
+          <button
+            onClick={goModuleHome}
+            className={`px-3 py-1.5 rounded-md border ${
+              dark
+                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
+                : "border-gray-300 text-gray-800 hover:bg-gray-50"
+            }`}
+            title="Back to Module 2"
+          >
+            Module 2
+          </button>
+
+          {/* Dark/Light toggle */}
           <button
             onClick={() => setDark((d) => !d)}
             className={`px-3 py-1.5 rounded-md border ${
@@ -722,6 +739,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           >
             {dark ? "Light" : "Dark"}
           </button>
+
+          {/* Submit & Run */}
           <button
             onClick={() => {
               if (!running) run();
@@ -732,6 +751,30 @@ export default function StageRunner({ stageId }: { stageId: string }) {
             disabled={running}
           >
             {running ? "Submitting…" : "Submit & Run"}
+          </button>
+
+          {/* Next Stage */}
+          <button
+            onClick={goNext}
+            disabled={!canGoNext}
+            className={`px-4 py-1.5 rounded-md border ${
+              canGoNext
+                ? dark
+                  ? "border-emerald-600 text-emerald-300 hover:bg-emerald-900/20"
+                  : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+                : dark
+                  ? "border-neutral-700 text-neutral-400 cursor-not-allowed"
+                  : "border-gray-300 text-gray-400 cursor-not-allowed"
+            }`}
+            title={
+              canGoNext
+                ? nextStage
+                  ? `Go to Stage ${nextStage.id}: ${nextStage.title}`
+                  : "Finish Module"
+                : "Complete this stage to unlock the next one"
+            }
+          >
+            {nextStage ? "Next Stage" : "Finish Module"}
           </button>
         </div>
       </div>
@@ -745,49 +788,49 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       {/* Right column */}
       <div className={`border-l p-3 min-h-0 ${rightBg}`}>
         <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-      {/* Intro card */}
-      <div
-        className={`rounded-xl border p-3 ${
-          dark ? "border-neutral-800 bg-neutral-900/50" : "border-gray-200 bg-white"
-        }`}
-      >
-        <div className="flex items-center justify-between">
-          <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
-            {stage.title}
-          </h3>
-
-          {/* Stage Help button */}
-          <button
-            aria-label="Stage help"
-            onClick={() => {
-              if (stage?.help) {
-                setInfoTitle(stage.help.title);
-                setInfoText(stage.help.text);
-                setInfoOpen(true);
-              }
-            }}
-            className={`h-8 w-8 rounded-full flex items-center justify-center border text-sm
-              ${
-                dark
-                  ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                  : "border-gray-300 text-gray-800 hover:bg-gray-50"
-              }`}
-            title="What does this stage teach?"
+          {/* Intro card */}
+          <div
+            className={`rounded-xl border p-3 ${
+              dark ? "border-neutral-800 bg-neutral-900/50" : "border-gray-200 bg-white"
+            }`}
           >
-            ?
-          </button>
-        </div>
+            <div className="flex items-center justify-between">
+              <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
+                {stage.title}
+              </h3>
 
-        <ul
-          className={`list-disc ml-5 mt-2 text-sm ${
-            dark ? "text-neutral-300" : "text-gray-700"
-          }`}
-        >
-          {stage.intro.map((t, i) => (
-            <li key={i}>{t}</li>
-          ))}
-        </ul>
-      </div>
+              {/* Stage Help button */}
+              <button
+                aria-label="Stage help"
+                onClick={() => {
+                  if (stage?.help) {
+                    setInfoTitle(stage.help.title);
+                    setInfoText(stage.help.text);
+                    setInfoOpen(true);
+                  }
+                }}
+                className={`h-8 w-8 rounded-full flex items-center justify-center border text-sm
+                  ${
+                    dark
+                      ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
+                      : "border-gray-300 text-gray-800 hover:bg-gray-50"
+                  }`}
+                title="What does this stage teach?"
+              >
+                ?
+              </button>
+            </div>
+
+            <ul
+              className={`list-disc ml-5 mt-2 text-sm ${
+                dark ? "text-neutral-300" : "text-gray-700"
+              }`}
+            >
+              {stage.intro.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+            </ul>
+          </div>
 
           {/* Checklist */}
           <MissionChecklistStage items={checkItems} dark={dark} />
