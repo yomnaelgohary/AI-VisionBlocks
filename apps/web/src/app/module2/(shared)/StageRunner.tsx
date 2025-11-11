@@ -745,23 +745,49 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       {/* Right column */}
       <div className={`border-l p-3 min-h-0 ${rightBg}`}>
         <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-          {/* Intro card */}
-          <div
-            className={`rounded-xl border p-3 ${
-              dark
-                ? "border-neutral-800 bg-neutral-900/50"
-                : "border-gray-200 bg-white"
-            }`}
+      {/* Intro card */}
+      <div
+        className={`rounded-xl border p-3 ${
+          dark ? "border-neutral-800 bg-neutral-900/50" : "border-gray-200 bg-white"
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
+            {stage.title}
+          </h3>
+
+          {/* Stage Help button */}
+          <button
+            aria-label="Stage help"
+            onClick={() => {
+              if (stage?.help) {
+                setInfoTitle(stage.help.title);
+                setInfoText(stage.help.text);
+                setInfoOpen(true);
+              }
+            }}
+            className={`h-8 w-8 rounded-full flex items-center justify-center border text-sm
+              ${
+                dark
+                  ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
+                  : "border-gray-300 text-gray-800 hover:bg-gray-50"
+              }`}
+            title="What does this stage teach?"
           >
-            <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
-              {stage.title}
-            </h3>
-            <ul className={`list-disc ml-5 mt-2 text-sm ${dark ? "text-neutral-300" : "text-gray-700"}`}>
-              {stage.intro.map((t, i) => (
-                <li key={i}>{t}</li>
-              ))}
-            </ul>
-          </div>
+            ?
+          </button>
+        </div>
+
+        <ul
+          className={`list-disc ml-5 mt-2 text-sm ${
+            dark ? "text-neutral-300" : "text-gray-700"
+          }`}
+        >
+          {stage.intro.map((t, i) => (
+            <li key={i}>{t}</li>
+          ))}
+        </ul>
+      </div>
 
           {/* Checklist */}
           <MissionChecklistStage items={checkItems} dark={dark} />
