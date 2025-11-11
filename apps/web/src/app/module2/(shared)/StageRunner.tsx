@@ -10,21 +10,35 @@ import OutputPanel, { type LogItem } from "@/components/OutputPanel";
 import BaymaxPanel from "@/components/BaymaxPanel";
 import InfoModal from "@/components/InfoModal";
 import SubmissionModal from "@/components/SubmissionModal";
-import MissionChecklistStage, { type StageChecklistItem, type Tri } from "@/components/MissionChecklistStage";
+import MissionChecklistStage, {
+  type StageChecklistItem,
+  type Tri,
+} from "@/components/MissionChecklistStage";
 import TargetPanel from "@/components/TargetPanel";
 
-import { module2Stages, type StageConfig, type OpSpec } from "@/data/module2Stages";
+import {
+  module2Stages,
+  type StageConfig,
+  type OpSpec,
+} from "@/data/module2Stages";
 
 const API_BASE = "http://localhost:8000";
 
-/* ----------------- helpers ----------------- */
+/* ----------------- HTTP helper ----------------- */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-type SampleResp = { dataset_key: string; index_used: number; label: string; image_data_url: string; path: string };
+/* ----------------- API types ----------------- */
+type SampleResp = {
+  dataset_key: string;
+  index_used: number;
+  label: string;
+  image_data_url: string;
+  path: string;
+};
 
 type ApplyResp = {
   dataset_key: string;
@@ -34,8 +48,14 @@ type ApplyResp = {
   after_shape: [number, number, number];
 };
 
-type ExportResp = { base_dataset: string; new_dataset_key: string; processed: number; classes: string[] };
+type ExportResp = {
+  base_dataset: string;
+  new_dataset_key: string;
+  processed: number;
+  classes: string[];
+};
 
+/* ----------------- Blockly → ops ----------------- */
 function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
   const ops: OpSpec[] = [];
   let b: BlocklyBlock | null = first;
@@ -52,14 +72,26 @@ function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
             keep: b.getFieldValue("KEEP"),
           });
         } else if (mode === "fit") {
-          ops.push({ type: "resize", mode: "fit", maxside: Number(b.getFieldValue("MAXSIDE") || 256) });
+          ops.push({
+            type: "resize",
+            mode: "fit",
+            maxside: Number(b.getFieldValue("MAXSIDE") || 256),
+          });
         } else {
-          ops.push({ type: "resize", mode: "scale", pct: Number(b.getFieldValue("PCT") || 100) });
+          ops.push({
+            type: "resize",
+            mode: "scale",
+            pct: Number(b.getFieldValue("PCT") || 100),
+          });
         }
         break;
       }
       case "m2.crop_center":
-        ops.push({ type: "crop_center", w: Number(b.getFieldValue("W") || 224), h: Number(b.getFieldValue("H") || 224) });
+        ops.push({
+          type: "crop_center",
+          w: Number(b.getFieldValue("W") || 224),
+          h: Number(b.getFieldValue("H") || 224),
+        });
         break;
       case "m2.pad":
         ops.push({
@@ -73,10 +105,18 @@ function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
         });
         break;
       case "m2.brightness_contrast":
-        ops.push({ type: "brightness_contrast", b: Number(b.getFieldValue("B") || 0), c: Number(b.getFieldValue("C") || 0) });
+        ops.push({
+          type: "brightness_contrast",
+          b: Number(b.getFieldValue("B") || 0),
+          c: Number(b.getFieldValue("C") || 0),
+        });
         break;
       case "m2.blur_sharpen":
-        ops.push({ type: "blur_sharpen", blur: Number(b.getFieldValue("BLUR") || 0), sharp: Number(b.getFieldValue("SHARP") || 0) });
+        ops.push({
+          type: "blur_sharpen",
+          blur: Number(b.getFieldValue("BLUR") || 0),
+          sharp: Number(b.getFieldValue("SHARP") || 0),
+        });
         break;
       case "m2.edges":
         ops.push({
@@ -106,16 +146,20 @@ function walkConnectedChainFrom(top: BlocklyBlock | null): string[] {
   return seq;
 }
 
-function findBlockByTypeInChain(top: BlocklyBlock | null, type: string): BlocklyBlock | null {
-  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) if (b.type === type) return b;
+function findBlockByTypeInChain(
+  top: BlocklyBlock | null,
+  type: string
+): BlocklyBlock | null {
+  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock())
+    if (b.type === type) return b;
   return null;
 }
 
-/* ----------------- main component ----------------- */
+/* ----------------- Component ----------------- */
 
 export default function StageRunner({ stageId }: { stageId: string }) {
   const stage: StageConfig | undefined = useMemo(
-    () => module2Stages.find(s => String(s.id) === String(stageId)),
+    () => module2Stages.find((s) => String(s.id) === String(stageId)),
     [stageId]
   );
 
@@ -142,10 +186,22 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [targetSrc, setTargetSrc] = useState<string>();
   const [currentSrc, setCurrentSrc] = useState<string>();
 
+  // NEW: debounce/thrash control
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const genTokenRef = useRef(0);
+  const lastCtxSigRef = useRef<string>("");
+
   const sizes = useMemo(() => ({ rightWidth: 380 }), []);
 
+  /* ---------- Blockly inject + listeners ---------- */
   useEffect(() => {
     if (!stage) return;
+
+    // reset image state + tokens on stage change
+    lastCtxSigRef.current = "";
+    genTokenRef.current++;
+    setTargetSrc(undefined);
+    setCurrentSrc(undefined);
 
     const ws = Blockly.inject(blocklyDivRef.current!, {
       toolbox: toolboxJsonModule2,
@@ -157,7 +213,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     });
 
     workspaceRef.current = ws;
-    try { (ws as any).scrollCenter?.(); } catch {}
+    try {
+      (ws as any).scrollCenter?.();
+    } catch {}
 
     const onInfo = (e: any) => {
       const { title, text } = e?.detail ?? {};
@@ -168,8 +226,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     window.addEventListener("vb:blockInfo", onInfo as any);
 
     const onChange = () => {
+      // Slight delay to coalesce UI events
       setTimeout(async () => {
-        if (stage?.type === "pipeline") await previewPipeline().catch(() => {});
+        if (stage?.type === "pipeline") {
+          previewPipelineDebounced();
+        }
         setCheckItems(computeChecklist(ws, stage));
       }, 200);
     };
@@ -187,69 +248,95 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   }, [stageId, dark]);
 
   useEffect(() => {
-    if (workspaceRef.current) workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
+    if (workspaceRef.current)
+      workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
   }, [dark]);
 
-  /* ----------- core: preview & target generation ----------- */
+  /* ---------- dataset/sample helpers ---------- */
 
-  // New: read dataset key without needing a sample image (Stage 7 needs this)
+  // Always pick up dataset key if present anywhere
   function ensureDatasetKey(ws: WorkspaceSvg) {
-    let dsKey: string | null = null;
     const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
     for (const b of blocks) {
       if (b.type === "dataset.select") {
-        dsKey = b.getFieldValue("DATASET");
+        datasetKeyRef.current = b.getFieldValue("DATASET");
         break;
       }
     }
-    if (dsKey) datasetKeyRef.current = dsKey;
   }
 
+  // Only fetch a sample when the sample block is CONNECTED after a dataset
+  // block in the same top chain. Avoids random-mode thrash while dragging.
   async function ensureSample(ws: WorkspaceSvg): Promise<void> {
-    let dsKey: string | null = null;
-    let mode: "random" | "index" | null = null;
-    let idx = 0;
+    let foundDsKey: string | null = null;
+    let foundSample: { mode: "random" | "index"; index?: number } | null = null;
 
-    for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
+    const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+    for (const top of tops) {
+      let dsKeyInThisChain: string | null = null;
       for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-        if (b.type === "dataset.select" && !dsKey) dsKey = b.getFieldValue("DATASET");
-        if (b.type === "dataset.sample_image" && mode === null) {
-          mode = b.getFieldValue("MODE") as "random" | "index";
-          const raw = b.getFieldValue("INDEX");
-          idx = typeof raw === "number" ? raw : parseInt(String(raw || 0), 10) || 0;
+        if (b.type === "dataset.select") {
+          dsKeyInThisChain = b.getFieldValue("DATASET");
+        }
+        if (b.type === "dataset.sample_image") {
+          if (dsKeyInThisChain) {
+            const mode = b.getFieldValue("MODE") as "random" | "index";
+            const raw = b.getFieldValue("INDEX");
+            const idx =
+              typeof raw === "number"
+                ? raw
+                : parseInt(String(raw || 0), 10) || 0;
+
+            foundDsKey = dsKeyInThisChain;
+            foundSample = mode === "index" ? { mode, index: idx } : { mode };
+            break;
+          }
         }
       }
+      if (foundDsKey && foundSample) break;
     }
 
-    // Always set dataset key if found, even if no sample block exists
-    if (dsKey) datasetKeyRef.current = dsKey;
-    if (!dsKey || !mode) return;
+    // keep dataset reference even if no sample block (needed by Stage 7)
+    ensureDatasetKey(ws);
+
+    if (!foundDsKey || !foundSample) return;
 
     const needFetch =
       !sampleRef.current ||
-      sampleRef.current.dataset_key !== dsKey ||
-      (mode === "index" && sampleRef.current.index_used !== idx);
+      sampleRef.current.dataset_key !== foundDsKey ||
+      (foundSample.mode === "index" &&
+        sampleRef.current.index_used !== (foundSample.index ?? 0));
 
-    if (needFetch) {
-      const url = `${API_BASE}/datasets/${encodeURIComponent(dsKey)}/sample?mode=${mode}${
-        mode === "index" ? `&index=${idx}` : ""
-      }`;
-      const sample = await fetchJSON<SampleResp>(url);
-      sampleRef.current = sample;
+    if (!needFetch) {
+      datasetKeyRef.current = foundDsKey;
+      return;
+    }
 
-      // dynamic target for pipeline stages
-      if (stage?.type === "pipeline" && stage.targetOps) {
-        const tgt = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dataset_key: dsKey,
-            path: sample.path,
-            ops: stage.targetOps,
-          }),
-        });
-        setTargetSrc(tgt.after_data_url);
-      }
+    const url =
+      foundSample.mode === "index"
+        ? `${API_BASE}/datasets/${encodeURIComponent(
+            foundDsKey
+          )}/sample?mode=index&index=${foundSample.index}`
+        : `${API_BASE}/datasets/${encodeURIComponent(
+            foundDsKey
+          )}/sample?mode=random`;
+
+    const sample = await fetchJSON<SampleResp>(url);
+    datasetKeyRef.current = foundDsKey;
+    sampleRef.current = sample;
+
+    // Build target (pipeline stages only)
+    if (stage?.type === "pipeline" && stage.targetOps) {
+      const tgt = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dataset_key: foundDsKey,
+          path: sample.path,
+          ops: stage.targetOps,
+        }),
+      });
+      setTargetSrc(tgt.after_data_url);
     }
   }
 
@@ -263,45 +350,67 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     return null;
   }
 
-  async function previewPipeline(): Promise<void> {
+  // Debounced preview that also drops stale results
+  async function previewPipelineDebounced() {
     const ws = workspaceRef.current;
     if (!ws || !stage) return;
-    await ensureSample(ws);
-    if (!sampleRef.current || !datasetKeyRef.current) return;
 
-    const top = findFirstPipelineTop(ws);
-    if (!top) return;
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(async () => {
+      const token = ++genTokenRef.current;
 
-    const ops = blocksToOps(top);
-    const resp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dataset_key: datasetKeyRef.current,
-        path: sampleRef.current.path,
+      await ensureSample(ws);
+      if (!sampleRef.current || !datasetKeyRef.current) return;
+
+      const top = findFirstPipelineTop(ws);
+      if (!top) return;
+
+      const ops = blocksToOps(top);
+      const ctxSig = JSON.stringify({
+        ds: datasetKeyRef.current,
+        samplePath: sampleRef.current.path, // pins exact random pick
         ops,
-      }),
-    });
-    setCurrentSrc(resp.after_data_url);
+      });
+      if (ctxSig === lastCtxSigRef.current) return;
+      lastCtxSigRef.current = ctxSig;
+
+      try {
+        const resp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dataset_key: datasetKeyRef.current,
+            path: sampleRef.current.path,
+            ops,
+          }),
+        });
+
+        if (token === genTokenRef.current) {
+          setCurrentSrc(resp.after_data_url);
+        }
+      } catch {
+        // ignore rapid-edit errors
+      }
+    }, 350);
   }
 
-  /* ----------- checklist (tri-state) ----------- */
+  /* ---------- Checklist (tri-state) ---------- */
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
 
-  // Parameter validator against stage.targetOps
+  // Parameter validation for a few ops used in stages
   function paramMismatch(block: BlocklyBlock | null, spec?: OpSpec): boolean {
     if (!block || !spec) return false;
 
     if (spec.type === "resize") {
       const mode = block.getFieldValue("MODE");
 
-      // Accept either:
+      // Accept EITHER:
       // - fit with maxside=150
-      // - size + keep=TRUE with either side == 150 (toward-150 rule)
+      // - size with keep=TRUE and (w==150 || h==150)
       if (mode === "fit") {
         const ms = Number(block.getFieldValue("MAXSIDE") || 0);
-        return ms !== 150; // strict for this curriculum
+        return ms !== 150;
       }
 
       if (mode === "size") {
@@ -309,13 +418,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const keep = String(keepRaw || "FALSE").toUpperCase() === "TRUE";
         const w = Number(block.getFieldValue("W") || 0);
         const h = Number(block.getFieldValue("H") || 0);
-        // "towards 150": keep aspect and at least one side equals 150
         if (keep && (w === 150 || h === 150)) return false;
         return true;
       }
 
-      // other modes not accepted for these stages
-      return true;
+      return true; // other modes not accepted for these resize stages
     }
 
     if (spec.type === "pad") {
@@ -325,7 +432,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     }
 
     if (spec.type === "normalize") {
-      // If stage specifies a mode, enforce it; otherwise accept any
       if ((spec as any).mode) {
         const m = block.getFieldValue("MODE");
         return m !== (spec as any).mode;
@@ -333,7 +439,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       return false;
     }
 
-    // Other blocks: no strict parameter enforcement in these stages
     return false;
   }
 
@@ -345,9 +450,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       const connectedOrder = topPipeline ? walkConnectedChainFrom(topPipeline) : [];
 
       const expected = s.expectedOrder || [];
-      // presence & order maps
       const present = new Map<string, boolean>();
-      expected.forEach(t => present.set(t, connectedOrder.includes(t)));
+      expected.forEach((t) => present.set(t, connectedOrder.includes(t)));
 
       const orderOK = new Map<string, boolean>();
       if (expected.length > 0) {
@@ -364,10 +468,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const inChain = !!present.get(t);
         const okOrder = !!orderOK.get(t);
 
-        // parameter-level check (only if block present)
+        // param check (if targetOps specify it)
         let paramOK = true;
         if (inChain && s.targetOps) {
-          const spec = s.targetOps.find(o => "m2." + o.type === t);
+          const spec = s.targetOps.find((o) => "m2." + o.type === t);
           const blk = findBlockByTypeInChain(topPipeline, t);
           if (spec && blk) paramOK = !paramMismatch(blk, spec);
         }
@@ -384,12 +488,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           state,
         });
       });
-
     } else {
-      // -------- Stage 7: loop + export --------
-      // IMPORTANT: loop may not be a top block (it’s often chained after dataset.select)
+      // Stage 7 (loop inside, export after)
       const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
-      const loopBlock = allBlocks.find(b => b.type === "m2.loop_dataset") || null;
+      const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
 
       const innerOrder = loopInner ? walkConnectedChainFrom(loopInner) : [];
@@ -397,9 +499,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       const required = s.requiredBlocksWithinLoop || [];
       const expected = s.expectedOrderWithinLoop || required;
 
-      // presence & order inside loop
       const present = new Map<string, boolean>();
-      required.forEach(bt => present.set(bt, innerOrder.includes(bt)));
+      required.forEach((bt) => present.set(bt, innerOrder.includes(bt)));
 
       const orderOK = new Map<string, boolean>();
       if (expected.length > 0) {
@@ -423,7 +524,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         });
       });
 
-      // export dataset after loop
       let exportState: Tri = "missing";
       if (loopBlock) {
         let cur: BlocklyBlock | null = loopBlock.getNextBlock();
@@ -431,22 +531,24 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         if (cur) exportState = "ok";
       }
       if (s.requireExportAfterLoop) {
-        items.push({ key: "m2.export_dataset", label: "export dataset (after loop)", state: exportState });
+        items.push({
+          key: "m2.export_dataset",
+          label: "export dataset (after loop)",
+          state: exportState,
+        });
       }
     }
 
     return items;
   }
 
-  /* ----------- submit/run ----------- */
-
+  /* ---------- Submit & Run ---------- */
   async function run() {
     if (!stage || !workspaceRef.current) return;
     setRunning(true);
 
     try {
       const ws = workspaceRef.current;
-      // Ensure we at least have the dataset key (Stage 7 may not have a sample block)
       ensureDatasetKey(ws);
       await ensureSample(ws);
 
@@ -458,7 +560,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const top = findFirstPipelineTop(ws);
         if (!top || !datasetKeyRef.current || !sampleRef.current) {
           ok = false;
-          lines.push("• Make sure the dataset & sample blocks are connected to a preprocessing chain.");
+          lines.push(
+            "• Make sure the dataset & sample blocks are connected to a preprocessing chain."
+          );
         } else {
           const ops = blocksToOps(top);
           const resp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
@@ -474,18 +578,26 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
           const itemsNow = computeChecklist(ws, stage);
           setCheckItems(itemsNow);
-          ok = ok && itemsNow.every(i => i.state === "ok");
+          ok = ok && itemsNow.every((i) => i.state === "ok");
 
-          if (ok) lines.push("✓ All required blocks used in the correct order (with correct settings).");
-          else lines.push("• Some items are missing, out of order, or have incorrect settings (marked with “–” or “???”).");
+          if (ok)
+            lines.push(
+              "✓ All required blocks used in the correct order (with correct settings)."
+            );
+          else
+            lines.push(
+              "• Some items are missing, out of order, or have incorrect settings (marked with “–” or “???”)."
+            );
         }
       } else {
-        // Stage 7 — dataset-wide
+        // Stage 7
         const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
-        const loopBlock = allBlocks.find(b => b.type === "m2.loop_dataset") || null;
+        const loopBlock =
+          allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
 
         if (!loopBlock) {
-          ok = false; lines.push("• Add the loop block and put the preprocessing pipeline inside it.");
+          ok = false;
+          lines.push("• Add the loop block and put the preprocessing pipeline inside it.");
         } else {
           const inner = loopBlock.getInputTargetBlock("DO");
           const ops = blocksToOps(inner);
@@ -494,36 +606,44 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           let cur: BlocklyBlock | null = loopBlock.getNextBlock();
           let exportBlock: BlocklyBlock | null = null;
           while (cur) {
-            if (cur.type === "m2.export_dataset") { exportBlock = cur; break; }
+            if (cur.type === "m2.export_dataset") {
+              exportBlock = cur;
+              break;
+            }
             cur = cur.getNextBlock();
           }
 
-          // Evaluate structure synchronously
           const itemsNow = computeChecklist(ws, stage);
           setCheckItems(itemsNow);
-          const structureOK = itemsNow.every(i => i.state === "ok");
+          const structureOK = itemsNow.every((i) => i.state === "ok");
           ok = ok && structureOK;
 
           if (ok && datasetKeyRef.current && exportBlock) {
             const newName = exportBlock.getFieldValue("NAME") || "processed";
             const overwrite = exportBlock.getFieldValue("OVERWRITE") === "TRUE";
 
-            // Subset config
             const subsetMode = loopBlock.getFieldValue("SUBSET");
             const N = Number(loopBlock.getFieldValue("N") || 0);
             const shuffle = loopBlock.getFieldValue("SHUFFLE") === "TRUE";
 
-            const resp = await fetchJSON<ExportResp>(`${API_BASE}/preprocess/batch_export`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                dataset_key: datasetKeyRef.current,
-                subset: { mode: subsetMode, n: subsetMode === "all" ? null : N, shuffle },
-                ops,
-                new_dataset_name: newName,
-                overwrite,
-              }),
-            });
+            const resp = await fetchJSON<ExportResp>(
+              `${API_BASE}/preprocess/batch_export`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  dataset_key: datasetKeyRef.current,
+                  subset: {
+                    mode: subsetMode,
+                    n: subsetMode === "all" ? null : N,
+                    shuffle,
+                  },
+                  ops,
+                  new_dataset_name: newName,
+                  overwrite,
+                }),
+              }
+            );
 
             newLogs.push({
               kind: "card",
@@ -536,7 +656,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
             });
           } else if (!structureOK) {
             ok = false;
-            lines.push("• Fix the checklist items (pipeline must be inside loop; correct order; export after loop).");
+            lines.push(
+              "• Fix the checklist items (pipeline must be inside loop; correct order; export after loop)."
+            );
           } else if (!datasetKeyRef.current) {
             ok = false;
             lines.push("• Add a 'use dataset' block so I know which dataset to process.");
@@ -552,7 +674,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       setSubmitLines(lines);
       setSubmitOpen(true);
       setLogs((prev) => [...prev, ...newLogs]);
-      setBaymax(ok ? "Great job! That pipeline looks perfect. 🎉" : "Try reordering blocks or adjusting settings until the checklist turns green.");
+      setBaymax(
+        ok
+          ? "Great job! That pipeline looks perfect. 🎉"
+          : "Try reordering blocks or adjusting settings until the checklist turns green."
+      );
     } catch (e: any) {
       setSubmitSuccess(false);
       setSubmitTitle("Error");
@@ -563,11 +689,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     }
   }
 
-  /* ----------- UI ----------- */
+  /* ---------- UI ---------- */
 
-  if (!stage) {
-    return <div className="p-6 text-red-600">Stage not found.</div>;
-  }
+  if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
 
   const appBg = dark ? "bg-neutral-950" : "bg-white";
   const barBg = dark ? "bg-neutral-900 border-neutral-800" : "bg-white border-gray-200";
@@ -590,15 +714,21 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           <button
             onClick={() => setDark((d) => !d)}
             className={`px-3 py-1.5 rounded-md border ${
-              dark ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800" : "border-gray-300 text-gray-800 hover:bg-gray-50"
+              dark
+                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
+                : "border-gray-300 text-gray-800 hover:bg-gray-50"
             }`}
             title="Toggle dark mode"
           >
             {dark ? "Light" : "Dark"}
           </button>
           <button
-            onClick={() => { if (!running) run(); }}
-            className={`px-4 py-1.5 rounded-md ${running ? "opacity-60 cursor-not-allowed" : ""} bg-black text-white`}
+            onClick={() => {
+              if (!running) run();
+            }}
+            className={`px-4 py-1.5 rounded-md ${
+              running ? "opacity-60 cursor-not-allowed" : ""
+            } bg-black text-white`}
             disabled={running}
           >
             {running ? "Submitting…" : "Submit & Run"}
@@ -607,38 +737,64 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       </div>
 
       {/* Workspace */}
-      <div ref={blocklyDivRef} className={`relative min-h-0 ${dark ? "bg-neutral-950" : "bg-white"}`} />
+      <div
+        ref={blocklyDivRef}
+        className={`relative min-h-0 ${dark ? "bg-neutral-950" : "bg-white"}`}
+      />
 
       {/* Right column */}
       <div className={`border-l p-3 min-h-0 ${rightBg}`}>
         <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-          {/* Intro */}
-          <div className={`rounded-xl border p-3 ${dark ? "border-neutral-800 bg-neutral-900/50" : "border-gray-200 bg-white"}`}>
-            <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>{stage.title}</h3>
+          {/* Intro card */}
+          <div
+            className={`rounded-xl border p-3 ${
+              dark
+                ? "border-neutral-800 bg-neutral-900/50"
+                : "border-gray-200 bg-white"
+            }`}
+          >
+            <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
+              {stage.title}
+            </h3>
             <ul className={`list-disc ml-5 mt-2 text-sm ${dark ? "text-neutral-300" : "text-gray-700"}`}>
-              {stage.intro.map((t, i) => <li key={i}>{t}</li>)}
+              {stage.intro.map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
             </ul>
           </div>
 
           {/* Checklist */}
           <MissionChecklistStage items={checkItems} dark={dark} />
 
-          {/* Target panel only for pipeline stages */}
+          {/* Target/current only for pipeline stages */}
           {stage.type === "pipeline" ? (
             <TargetPanel targetSrc={targetSrc} currentSrc={currentSrc} dark={dark} />
           ) : null}
 
-          {/* Output & Baymax */}
+          {/* Output + Baymax */}
           <OutputPanel logs={logs} onClear={() => setLogs([])} dark={dark} />
           <BaymaxPanel line={baymax} dark={dark} />
         </div>
       </div>
 
       {/* Info modal */}
-      <InfoModal open={infoOpen} title={infoTitle} text={infoText} dark={dark} onClose={() => setInfoOpen(false)} />
+      <InfoModal
+        open={infoOpen}
+        title={infoTitle}
+        text={infoText}
+        dark={dark}
+        onClose={() => setInfoOpen(false)}
+      />
 
-      {/* Submission result modal */}
-      <SubmissionModal open={submitOpen} onClose={() => setSubmitOpen(false)} dark={dark} title={submitTitle} lines={submitLines} success={submitSuccess} />
+      {/* Submission modal */}
+      <SubmissionModal
+        open={submitOpen}
+        onClose={() => setSubmitOpen(false)}
+        dark={dark}
+        title={submitTitle}
+        lines={submitLines}
+        success={submitSuccess}
+      />
     </div>
   );
 }
