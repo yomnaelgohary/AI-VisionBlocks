@@ -1,20 +1,30 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { WorkspaceSvg, Block as BlocklyBlock } from "blockly";
 import { Blockly } from "@/lib/blockly";
+import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 import { toolboxJson } from "@/components/Toolbox";
+
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
 import BaymaxPanel from "@/components/BaymaxPanel";
-import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
+import InfoModal from "@/components/InfoModal";
+import SubmissionModal from "@/components/SubmissionModal";
+import MissionChecklistStage, {
+  type StageChecklistItem,
+  type Tri,
+} from "@/components/MissionChecklistStage";
 
 const API_BASE = "http://localhost:8000";
 
+/* ----------------- API types ----------------- */
 type DatasetInfo = {
   key: string;
   name: string;
-  description?: string;
-  image_shape: [number | null, number | null, number | null];
+  description?: string | null;
+  image_shape?: [number | null, number | null, number | null] | null;
   num_classes: number;
   classes: string[];
   approx_count: Record<string, number>;
@@ -26,180 +36,83 @@ type SampleResponse = {
   index_used: number;
   label: string;
   image_data_url: string;
-  path?: string;
+  path: string;
 };
 
-async function fetchJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+type SplitResp = { r_data_url: string; g_data_url: string; b_data_url: string };
+type GrayResp = { image_data_url: string };
+
+/* ----------------- HTTP helper ----------------- */
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-async function runWorkspace(workspace: WorkspaceSvg): Promise<{ logs: LogItem[]; baymax: string }> {
-  const logs: LogItem[] = [];
-  let baymax = "I don't know how to see yet. Can we start by choosing a dataset?";
-
-  let datasetKey: string | null = null;
-  let dsInfo: DatasetInfo | null = null;
-  let lastSample: SampleResponse | null = null;
-
-  const tops = workspace.getTopBlocks(true) as BlocklyBlock[];
-
+/* ----------------- Chain helpers ----------------- */
+function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
+  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+  const chains: BlocklyBlock[][] = [];
   for (const top of tops) {
-    let b: BlocklyBlock | null = top;
-    while (b) {
-      const type = b.type;
-
-      if (type === "dataset.select") {
-        datasetKey = (b.getFieldValue("DATASET") as string) ?? null;
-        dsInfo = null;
-        lastSample = null;
-        logs.push({ kind: "info", text: `[info] Using dataset: ${datasetKey}` });
-        baymax = `Okay… I picked ${datasetKey}. What should we look at next?`;
-      }
-
-      if (type === "dataset.info") {
-        if (!datasetKey) {
-          logs.push({ kind: "warn", text: "Please add 'use dataset' before 'dataset info'." });
-        } else {
-          dsInfo = await fetchJSON<DatasetInfo>(`${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/info`);
-          const lines = [
-            `Name: ${dsInfo.name}`,
-            `Classes: ${dsInfo.classes.join(", ")}`,
-          ];
-          logs.push({ kind: "card", title: "Dataset Info", lines });
-          baymax = "That gives me some clues. Maybe we can try a sample image?";
-        }
-      }
-
-      if (type === "dataset.class_counts") {
-        if (!datasetKey) {
-          logs.push({ kind: "warn", text: "Please add 'use dataset' before 'class counts'." });
-        } else {
-          if (!dsInfo) dsInfo = await fetchJSON<DatasetInfo>(`${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/info`);
-          const lines = Object.entries(dsInfo.approx_count).map(([k, v]) => `${k}: ${v}`);
-          logs.push({ kind: "card", title: "Class Counts", lines });
-          baymax = "So some classes appear more than others. That could matter later.";
-        }
-      }
-
-      if (type === "dataset.sample_image") {
-        if (!datasetKey) {
-          logs.push({ kind: "warn", text: "Please add 'use dataset' before 'get sample image'." });
-        } else {
-          const mode = (b.getFieldValue("MODE") as string) as "random" | "index";
-          const idxRaw = b.getFieldValue("INDEX");
-          const idx = typeof idxRaw === "number" ? idxRaw : parseInt(String(idxRaw || 0), 10) || 0;
-          const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/sample?mode=${mode}${
-            mode === "index" ? `&index=${idx}` : ""
-          }`;
-          lastSample = await fetchJSON<SampleResponse>(url);
-          logs.push({
-            kind: "preview",
-            text:
-              mode === "index"
-                ? `[preview] sample image loaded (index ${lastSample.index_used})`
-                : `[preview] sample image loaded (random index ${lastSample.index_used})`,
-          });
-          baymax = "I see something! Can you show it to me?";
-        }
-      }
-
-      if (type === "image.show") {
-        if (!lastSample) {
-          logs.push({ kind: "warn", text: "Please get a sample image first, then 'show image'." });
-        } else {
-          const title = (b.getFieldValue("TITLE") as string) || "Sample";
-          logs.push({
-            kind: "image",
-            src: lastSample.image_data_url,
-            caption: `${title} - label: ${lastSample.label}`,
-          });
-          baymax = "I can see the picture! What size is it?";
-        }
-      }
-
-      if (type === "image.shape") {
-        logs.push({ kind: "info", text: `[shape] (we'll compute this precisely in Module 2)` });
-      }
-
-      if (type === "image.channels_split") {
-        if (!lastSample || !lastSample.path || !datasetKey) {
-          logs.push({ kind: "warn", text: "Please get a sample image first, then 'split RGB channels'." });
-        } else {
-          const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/split_channels?path=${encodeURIComponent(
-            lastSample.path!
-          )}`;
-          const resp = await fetchJSON<{ r_data_url: string; g_data_url: string; b_data_url: string }>(url);
-          logs.push({
-            kind: "images",
-            items: [
-              { src: resp.r_data_url, caption: "Red channel" },
-              { src: resp.g_data_url, caption: "Green channel" },
-              { src: resp.b_data_url, caption: "Blue channel" },
-            ],
-          });
-          baymax = "Oh! Colors are made of pieces. That's new to me!";
-        }
-      }
-
-      if (type === "image.to_grayscale_preview") {
-        if (!lastSample || !lastSample.path || !datasetKey) {
-          logs.push({ kind: "warn", text: "Please get a sample image first, then 'grayscale preview'." });
-        } else {
-          const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/grayscale?path=${encodeURIComponent(
-            lastSample.path!
-          )}`;
-          const resp = await fetchJSON<{ image_data_url: string }>(url);
-          logs.push({ kind: "image", src: resp.image_data_url, caption: "Grayscale" });
-          baymax = "This looks simpler. I think I'm beginning to get it.";
-        }
-      }
-
-      if (type === "dataset.class_distribution_preview") {
-        if (!datasetKey) {
-          logs.push({ kind: "warn", text: "Please add 'use dataset' before 'class distribution preview'." });
-        } else {
-          if (!dsInfo) dsInfo = await fetchJSON<DatasetInfo>(`${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/info`);
-          const total = Object.values(dsInfo.approx_count).reduce((a, b) => a + b, 0) || 1;
-          const data = Object.entries(dsInfo.approx_count).map(([label, count]) => ({
-            label,
-            percent: (count / total) * 100,
-          }));
-          logs.push({ kind: "chart", title: "Class Distribution (%)", data });
-          baymax = "If some classes are rare, that might be hard for me later.";
-        }
-      }
-
-      b = b.getNextBlock();
-    }
+    const chain: BlocklyBlock[] = [];
+    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) chain.push(b);
+    chains.push(chain);
   }
-
-  if (logs.length === 0) {
-    logs.push({ kind: "warn", text: "No blocks to run. Try adding 'use dataset' and 'get sample image'." });
-  }
-
-  return { logs, baymax };
+  return chains;
 }
+const hasType = (chain: BlocklyBlock[], type: string) => chain.some((b) => b.type === type);
+const indexOfType = (chain: BlocklyBlock[], type: string) =>
+  chain.findIndex((b) => b.type === type);
+const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) => {
+  const a = indexOfType(chain, beforeType);
+  const b = indexOfType(chain, targetType);
+  return a !== -1 && b !== -1 && b > a;
+};
 
-export default function Page() {
+export default function Module1Page() {
+  const router = useRouter();
+
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
 
-  const [logs, setLogs] = useState<LogItem[]>([]);
-  const [baymaxLine, setBaymaxLine] = useState<string>(
-    "Hello… I don’t know how to see yet. Can you help me?"
-  );
   const [dark, setDark] = useState<boolean>(true);
   const [running, setRunning] = useState<boolean>(false);
 
+  const [logs, setLogs] = useState<LogItem[]>([]);
+  const [baymax, setBaymax] = useState<string>(
+    "Hello… I don’t know how to see yet. Can you help me?"
+  );
+
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [infoTitle, setInfoTitle] = useState<string>();
+  const [infoText, setInfoText] = useState<string>();
+
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitTitle, setSubmitTitle] = useState("Submission");
+  const [submitLines, setSubmitLines] = useState<string[]>([]);
+  const [submitSuccess, setSubmitSuccess] = useState(false);
+
+  // Unlock Module 2 only after success
+  const [module2Unlocked, setModule2Unlocked] = useState(false);
+
+  // Live refs
+  const datasetKeyRef = useRef<string | null>(null);
+  const dsInfoRef = useRef<DatasetInfo | null>(null);
+  const sampleRef = useRef<SampleResponse | null>(null);
+
+  // Debounce
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tokenRef = useRef(0);
+  const lastSigRef = useRef<string>("");
+
+  const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
   const sizes = useMemo(() => ({ rightWidth: 380 }), []);
 
-  // Inject workspace once
+  /* ---------- Inject Blockly ---------- */
   useEffect(() => {
     if (!blocklyDivRef.current) return;
 
-    const workspace = Blockly.inject(blocklyDivRef.current, {
+    const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJson,
       renderer: "zelos",
       theme: dark ? DarkTheme : LightTheme,
@@ -207,23 +120,285 @@ export default function Page() {
       scrollbars: true,
       zoom: { controls: true, wheel: true, startScale: 0.9 },
     });
-    workspaceRef.current = workspace;
-
-    workspace.clear();
+    workspaceRef.current = ws;
     try {
-      (workspace as any).scrollCenter?.();
+      (ws as any).scrollCenter?.();
     } catch {}
 
-    return () => workspace.dispose();
+    const onInfo = (e: any) => {
+      const { title, text } = e?.detail ?? {};
+      setInfoTitle(title || "About this block");
+      setInfoText(text || "");
+      setInfoOpen(true);
+    };
+    window.addEventListener("vb:blockInfo", onInfo as any);
+
+    const onChange = () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        instantFeedback();
+      }, 250);
+    };
+    ws.addChangeListener(onChange);
+
+    setCheckItems(computeChecklist(ws));
+
+    return () => {
+      window.removeEventListener("vb:blockInfo", onInfo as any);
+      ws.removeChangeListener(onChange);
+      ws.dispose();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocklyDivRef.current]);
 
-  // Toggle theme live
+  // Live theme
   useEffect(() => {
     if (!workspaceRef.current) return;
     workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
   }, [dark]);
 
+  /* ---------- Instant feedback (attached-chain only) ---------- */
+  async function instantFeedback() {
+    const ws = workspaceRef.current;
+    if (!ws) return;
+
+    const chains = getTopChains(ws);
+    const dsChain = chains.find((ch) => hasType(ch, "dataset.select"));
+
+    // dataset key from that chain
+    if (dsChain) {
+      const dsBlock = dsChain.find((b) => b.type === "dataset.select");
+      datasetKeyRef.current = (dsBlock?.getFieldValue("DATASET") as string) || null;
+    } else {
+      datasetKeyRef.current = null;
+    }
+
+    // same-chain checks
+    const infoInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.info"));
+    const countsInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.class_counts"));
+    const distInChain = !!(
+      dsChain && isAfter(dsChain, "dataset.select", "dataset.class_distribution_preview")
+    );
+    const sampleInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.sample_image"));
+    const showInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.show"));
+    const splitInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.channels_split"));
+    const grayInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.to_grayscale_preview"));
+
+    // sample config
+    let sampleConf: { mode: "random" | "index"; index?: number } | null = null;
+    if (sampleInChain && dsChain) {
+      const smp = dsChain.find((b) => b.type === "dataset.sample_image");
+      if (smp) {
+        const mode = (smp.getFieldValue("MODE") as "random" | "index") || "random";
+        const raw = smp.getFieldValue("INDEX");
+        const idx = typeof raw === "number" ? raw : parseInt(String(raw || 0), 10) || 0;
+        sampleConf = mode === "index" ? { mode, index: idx } : { mode };
+      }
+    }
+
+    // signature
+    const sig = JSON.stringify({
+      ds: datasetKeyRef.current ?? null,
+      infoInChain,
+      countsInChain,
+      distInChain,
+      sampleInChain,
+      sample: sampleConf || null,
+      showInChain,
+      splitInChain,
+      grayInChain,
+    });
+    if (sig === lastSigRef.current) {
+      setCheckItems(computeChecklist(ws));
+      return;
+    }
+    lastSigRef.current = sig;
+    const myToken = ++tokenRef.current;
+
+    try {
+      const newLogs: LogItem[] = [];
+
+      // dataset info family
+      if (datasetKeyRef.current) {
+        if (infoInChain) {
+          dsInfoRef.current = await fetchJSON<DatasetInfo>(
+            `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`
+          );
+          newLogs.push({
+            kind: "card",
+            title: "Dataset Info",
+            lines: [
+              `Name: ${dsInfoRef.current.name}`,
+              `Classes: ${dsInfoRef.current.classes.join(", ") || "(none)"}`,
+            ],
+          });
+        }
+        if (countsInChain) {
+          if (!dsInfoRef.current) {
+            dsInfoRef.current = await fetchJSON<DatasetInfo>(
+              `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`
+            );
+          }
+          const lines = Object.entries(dsInfoRef.current.approx_count || {}).map(
+            ([c, n]) => `${c}: ${n}`
+          );
+          newLogs.push({
+            kind: "card",
+            title: "Class Counts",
+            lines: lines.length ? lines : ["(no images)"],
+          });
+        }
+        if (distInChain) {
+          if (!dsInfoRef.current) {
+            dsInfoRef.current = await fetchJSON<DatasetInfo>(
+              `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`
+            );
+          }
+          const total =
+            Object.values(dsInfoRef.current.approx_count || {}).reduce((a, c) => a + c, 0) || 1;
+          const chart = Object.entries(dsInfoRef.current.approx_count || {}).map(([label, count]) => ({
+            label,
+            percent: (count / total) * 100,
+          }));
+          newLogs.push({ kind: "chart", title: "Class Distribution (%)", data: chart });
+        }
+      }
+
+      // sample + previews
+      if (datasetKeyRef.current && sampleConf && sampleInChain) {
+        const url =
+          sampleConf.mode === "index"
+            ? `${API_BASE}/datasets/${encodeURIComponent(
+                datasetKeyRef.current
+              )}/sample?mode=index&index=${sampleConf.index}`
+            : `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/sample?mode=random`;
+
+        sampleRef.current = await fetchJSON<SampleResponse>(url);
+
+        if (showInChain) {
+          newLogs.push({
+            kind: "image",
+            src: sampleRef.current.image_data_url,
+            caption: `Original — label: ${sampleRef.current.label}`,
+          });
+        } else {
+          newLogs.push({
+            kind: "preview",
+            text: `[preview] sample loaded (index ${sampleRef.current.index_used}); add 'show image' after 'use dataset' to display it`,
+          });
+        }
+
+        if (splitInChain) {
+          const split = await fetchJSON<SplitResp>(
+            `${API_BASE}/datasets/${encodeURIComponent(
+              datasetKeyRef.current
+            )}/split_channels?path=${encodeURIComponent(sampleRef.current.path)}`
+          );
+          newLogs.push({
+            kind: "images",
+            items: [
+              { src: split.r_data_url, caption: "Red channel" },
+              { src: split.g_data_url, caption: "Green channel" },
+              { src: split.b_data_url, caption: "Blue channel" },
+            ],
+          });
+        }
+
+        if (grayInChain) {
+          const gray = await fetchJSON<GrayResp>(
+            `${API_BASE}/datasets/${encodeURIComponent(
+              datasetKeyRef.current
+            )}/grayscale?path=${encodeURIComponent(sampleRef.current.path)}`
+          );
+          newLogs.push({ kind: "image", src: gray.image_data_url, caption: "Grayscale preview" });
+        }
+
+        setBaymax("Nice! That chain works. Try showing channels or grayscale to explore.");
+      } else {
+        if (dsChain) {
+          setBaymax(
+            "Great—now connect blocks after ‘use dataset’. Put ‘get sample image’ and ‘show image’ in the same chain."
+          );
+        } else {
+          setBaymax("Start by dragging in ‘use dataset’. Then attach other blocks below it.");
+        }
+      }
+
+      if (myToken === tokenRef.current) setLogs(newLogs);
+    } catch {
+      // ignore transient errors
+    } finally {
+      setCheckItems(computeChecklist(ws));
+    }
+  }
+
+  /* ---------- Checklist ---------- */
+  function computeChecklist(ws: WorkspaceSvg): StageChecklistItem[] {
+    const chains = getTopChains(ws);
+    const dsChain = chains.find((ch) => hasType(ch, "dataset.select"));
+    const items: StageChecklistItem[] = [];
+
+    const spec = [
+      { key: "dataset.select", label: "use dataset" },
+      { key: "dataset.info", label: "dataset info" },
+      { key: "dataset.class_counts", label: "class counts" },
+      { key: "dataset.class_distribution_preview", label: "class distribution preview" },
+      { key: "dataset.sample_image", label: "get sample image" },
+      { key: "image.show", label: "show image" },
+      { key: "image.channels_split", label: "split RGB channels (preview)" },
+      { key: "image.to_grayscale_preview", label: "grayscale preview" },
+    ];
+
+    for (const it of spec) {
+      let state: Tri = "missing";
+
+      if (!dsChain) {
+        state = "missing";
+      } else {
+        const present = hasType(dsChain, it.key);
+        if (!present) state = "missing";
+        else {
+          const okOrder = isAfter(dsChain, "dataset.select", it.key) || it.key === "dataset.select";
+          state = okOrder ? "ok" : "wrong_place";
+        }
+      }
+
+      items.push({ key: it.key, label: it.label, state });
+    }
+    return items;
+  }
+
+  /* ---------- Submit & Run ---------- */
+  async function run() {
+    const ws = workspaceRef.current;
+    if (!ws) return;
+
+    setRunning(true);
+    try {
+      await instantFeedback();
+      const items = computeChecklist(ws);
+      const ok = items.every((i) => i.state === "ok");
+      setSubmitSuccess(ok);
+      setSubmitTitle(ok ? "Mission Complete!" : "Keep Exploring");
+      setSubmitLines(
+        ok
+          ? ["✓ Great work! You explored dataset info, loaded a sample, and visualized it in one chain."]
+          : ["• Some items are missing or not attached after ‘use dataset’. Reorder until they turn green."]
+      );
+      setSubmitOpen(true);
+      setBaymax(
+        ok
+          ? "You’ve got the basics! Time to try Module 2 and start preprocessing. 🚀"
+          : "Make sure each block is connected below ‘use dataset’ in the same chain."
+      );
+
+      if (ok && !module2Unlocked) setModule2Unlocked(true);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  /* ---------- UI ---------- */
   const appBg = dark ? "bg-neutral-950" : "bg-white";
   const barBg = dark ? "bg-neutral-900 border-neutral-800" : "bg-white border-gray-200";
   const barText = dark ? "text-neutral-100" : "text-gray-900";
@@ -240,10 +415,11 @@ export default function Page() {
     >
       {/* Top bar */}
       <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>VisionBlocks | Mission 1: Learn to See</div>
+        <div className={`font-semibold ${barText}`}>VisionBlocks — Module 1: Learn to See</div>
         <div className="flex gap-2 items-center">
+          {/* Theme toggle */}
           <button
-            onClick={() => setDark(!dark)}
+            onClick={() => setDark((d) => !d)}
             className={`px-3 py-1.5 rounded-md border ${
               dark
                 ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
@@ -254,44 +430,79 @@ export default function Page() {
             {dark ? "Light" : "Dark"}
           </button>
 
+          {/* Submit & Run */}
           <button
-            onClick={async () => {
-              if (!workspaceRef.current || running) return;
-              setRunning(true);
-              setLogs((prev) => [...prev, { kind: "info", text: "Running..." }]);
-              try {
-                const result = await runWorkspace(workspaceRef.current);
-                setLogs(result.logs);
-                setBaymaxLine(result.baymax);
-              } catch (e: any) {
-                setLogs((prev) => [...prev, { kind: "error", text: `Run failed: ${e?.message || String(e)}` }]);
-              } finally {
-                setRunning(false);
-              }
+            onClick={() => {
+              if (!running) run();
             }}
-            className={`px-4 py-1.5 rounded-md ${running ? "opacity-60 cursor-not-allowed" : ""} bg-black text-white`}
+            className={`px-4 py-1.5 rounded-md ${
+              running ? "opacity-60 cursor-not-allowed" : ""
+            } bg-black text-white`}
             disabled={running}
           >
-            {running ? "Running…" : "Run"}
+            {running ? "Submitting…" : "Submit & Run"}
           </button>
+
+          {/* Module 2 button — exact style/position as StageRunner's Next Stage */}
+          {module2Unlocked ? (
+            <button
+              onClick={() => router.push("/module2")}
+              className={`px-4 py-1.5 rounded-md border ${
+                dark
+                  ? "border-emerald-600 text-emerald-300 hover:bg-emerald-900/20"
+                  : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
+              }`}
+              title="Go to Module 2"
+            >
+              Module 2
+            </button>
+          ) : (
+            <button
+              type="button"
+              aria-disabled="true"
+              className={`px-4 py-1.5 rounded-md border ${
+                dark
+                  ? "border-neutral-700 text-neutral-400 cursor-not-allowed"
+                  : "border-gray-300 text-gray-400 cursor-not-allowed"
+              }`}
+              title="Complete this mission to unlock Module 2"
+            >
+              Module 2
+            </button>
+          )}
         </div>
       </div>
 
       {/* Middle: Blockly workspace */}
-      <div ref={blocklyDivRef} className={`relative min-h-0 ${dark ? "bg-neutral-950" : "bg-white"}`} />
+      <div ref={blocklyDivRef} className={`relative min-h-0 ${appBg}`} />
 
-      {/* Right: Output (fixed height, scrolls inside) + Baymax */}
-      <div className={`border-l p-3 flex flex-col gap-4 min-h-0 ${rightBg}`}>
-        {/* Fixed height area that always stays the same; OutputPanel scrolls inside */}
-        <div className="h-[40vh]">
+      {/* Right: Checklist + Output + Baymax */}
+      <div className={`border-l p-3 min-h-0 ${rightBg}`}>
+        <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
+          <MissionChecklistStage items={checkItems} dark={dark} />
           <OutputPanel logs={logs} onClear={() => setLogs([])} dark={dark} />
-        </div>
-
-        {/* Baymax panel below, takes remaining space */}
-        <div className="flex-1 min-h-0">
-          <BaymaxPanel line={baymaxLine} dark={dark} />
+          <BaymaxPanel line={baymax} dark={dark} />
         </div>
       </div>
+
+      {/* Info Modal */}
+      <InfoModal
+        open={infoOpen}
+        title={infoTitle}
+        text={infoText}
+        dark={dark}
+        onClose={() => setInfoOpen(false)}
+      />
+
+      {/* Submission Modal */}
+      <SubmissionModal
+        open={submitOpen}
+        onClose={() => setSubmitOpen(false)}
+        dark={dark}
+        title={submitTitle}
+        lines={submitLines}
+        success={submitSuccess}
+      />
     </div>
   );
 }
