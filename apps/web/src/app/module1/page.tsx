@@ -69,19 +69,22 @@ const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) 
   return a !== -1 && b !== -1 && b > a;
 };
 
+type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
+
 export default function Module1Page() {
   const router = useRouter();
 
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
 
-  const [dark, setDark] = useState<boolean>(true);
   const [running, setRunning] = useState<boolean>(false);
 
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [baymax, setBaymax] = useState<string>(
-    "Hello… I don’t know how to see yet. Can you help me?"
+    "Right now I’m basically staring into the void 😅. Start by hanging a “use dataset” block so we have something to look at."
   );
+  const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
+  const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTitle, setInfoTitle] = useState<string>();
@@ -106,7 +109,6 @@ export default function Module1Page() {
   const lastSigRef = useRef<string>("");
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
-  const sizes = useMemo(() => ({ rightWidth: 380 }), []);
 
   /* ---------- Inject Blockly ---------- */
   useEffect(() => {
@@ -115,7 +117,7 @@ export default function Module1Page() {
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJson,
       renderer: "zelos",
-      theme: dark ? DarkTheme : LightTheme,
+      theme: LightTheme,
       trashcan: true,
       scrollbars: true,
       zoom: { controls: true, wheel: true, startScale: 0.9 },
@@ -151,11 +153,126 @@ export default function Module1Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocklyDivRef.current]);
 
-  // Live theme
-  useEffect(() => {
-    if (!workspaceRef.current) return;
-    workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
-  }, [dark]);
+  /* ---------- Baymax helper driven by checklist ---------- */
+  function updateBaymaxFromChecklist(args: {
+    dsChain?: BlocklyBlock[];
+    checkItems: StageChecklistItem[];
+    sampleLoaded: boolean;
+    showInChain: boolean;
+  }) {
+    const { dsChain, checkItems, sampleLoaded, showInChain } = args;
+    const done = checkItems.filter((i) => i.state === "ok").length;
+
+    const missingKeys = checkItems.filter((i) => i.state === "missing").map((i) => i.key);
+    const wrongKeys = checkItems.filter((i) => i.state === "wrong_place").map((i) => i.key);
+
+    // No dataset at all
+    if (!dsChain) {
+      setBaymax(
+        "We don’t have a dataset picked yet. Try dropping one block that tells me *which* dataset we’re exploring, then stack the rest under it."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(false);
+      return;
+    }
+
+    // Some blocks exist but order is off
+    if (wrongKeys.length > 0) {
+      setBaymax(
+        "A few blocks are hanging in there, but the order feels a bit scrambled. Keep it as one neat vertical chain: choose the dataset first, then info/stats, then image stuff lower down."
+      );
+      setBaymaxMood("warning");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Missing: dataset info
+    if (missingKeys.includes("dataset.info")) {
+      setBaymax(
+        "We know *which* dataset we’re using, but we’re not asking it for any basic info yet. Maybe try adding something under the dataset that lets us read its summary."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Missing: counts / distribution
+    if (
+      missingKeys.includes("dataset.class_counts") ||
+      missingKeys.includes("dataset.class_distribution_preview")
+    ) {
+      setBaymax(
+        "We’ve got the dataset, but we’re not really looking at how the labels are spread out. Think of a block that shows how many examples each class has or how the classes are distributed."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Missing: sample image
+    if (missingKeys.includes("dataset.sample_image")) {
+      setBaymax(
+        "Right now we’re only talking *about* the dataset, not actually looking at a picture from it. Try adding something that grabs one example image for us."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Sample loaded but nothing displays it
+    if (sampleLoaded && !showInChain) {
+      setBaymax(
+        "We’re pulling an image, but we never actually show it on screen. Maybe think of a block that takes that sample and turns it into a visible preview."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Missing: channels / grayscale previews
+    if (
+      missingKeys.includes("image.channels_split") &&
+      missingKeys.includes("image.to_grayscale_preview")
+    ) {
+      setBaymax(
+        "We see the full-color image, but we haven’t tried breaking it down or simplifying it yet. Look for blocks that let you split colors or view a simpler, one-channel version."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    } else if (missingKeys.includes("image.channels_split")) {
+      setBaymax(
+        "We’ve got the picture, but we’re not inspecting the color channels separately. Try something that peels the image into red, green, and blue pieces."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    } else if (missingKeys.includes("image.to_grayscale_preview")) {
+      setBaymax(
+        "We’re still only viewing the full-color image. Maybe try a block that shows what it looks like if we collapse it into just light/dark values."
+      );
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Everything present & in order
+    if (done === checkItems.length && checkItems.length > 0) {
+      setBaymax(
+        "This chain is doing everything we need: info, counts, distribution, and visuals all in one line. If it looks good to you, try hitting “Submit & Run”."
+      );
+      setBaymaxMood("success");
+      setBaymaxTyping(false);
+      return;
+    }
+
+    // Default “almost there” vibe
+    setBaymax(
+      "You’re pretty close. Just keep everything stacked under the dataset block and think in this order: understand the dataset first, then grab a sample, then explore how it looks."
+    );
+    setBaymaxMood("neutral");
+    setBaymaxTyping(true);
+  }
 
   /* ---------- Instant feedback (attached-chain only) ---------- */
   async function instantFeedback() {
@@ -181,8 +298,12 @@ export default function Module1Page() {
     );
     const sampleInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.sample_image"));
     const showInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.show"));
-    const splitInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.channels_split"));
-    const grayInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.to_grayscale_preview"));
+    const splitInChain = !!(
+      dsChain && isAfter(dsChain, "dataset.select", "image.channels_split")
+    );
+    const grayInChain = !!(
+      dsChain && isAfter(dsChain, "dataset.select", "image.to_grayscale_preview")
+    );
 
     // sample config
     let sampleConf: { mode: "random" | "index"; index?: number } | null = null;
@@ -209,7 +330,14 @@ export default function Module1Page() {
       grayInChain,
     });
     if (sig === lastSigRef.current) {
-      setCheckItems(computeChecklist(ws));
+      const checklistNow = computeChecklist(ws);
+      setCheckItems(checklistNow);
+      updateBaymaxFromChecklist({
+        dsChain,
+        checkItems: checklistNow,
+        sampleLoaded: !!(datasetKeyRef.current && sampleConf && sampleInChain),
+        showInChain,
+      });
       return;
     }
     lastSigRef.current = sig;
@@ -255,16 +383,21 @@ export default function Module1Page() {
             );
           }
           const total =
-            Object.values(dsInfoRef.current.approx_count || {}).reduce((a, c) => a + c, 0) || 1;
-          const chart = Object.entries(dsInfoRef.current.approx_count || {}).map(([label, count]) => ({
-            label,
-            percent: (count / total) * 100,
-          }));
+            Object.values(dsInfoRef.current.approx_count || {}).reduce((a, c) => a + c, 0) ||
+            1;
+          const chart = Object.entries(dsInfoRef.current.approx_count || {}).map(
+            ([label, count]) => ({
+              label,
+              percent: (count / total) * 100,
+            })
+          );
           newLogs.push({ kind: "chart", title: "Class Distribution (%)", data: chart });
         }
       }
 
       // sample + previews
+      let sampleLoaded = false;
+
       if (datasetKeyRef.current && sampleConf && sampleInChain) {
         const url =
           sampleConf.mode === "index"
@@ -274,6 +407,7 @@ export default function Module1Page() {
             : `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/sample?mode=random`;
 
         sampleRef.current = await fetchJSON<SampleResponse>(url);
+        sampleLoaded = true;
 
         if (showInChain) {
           newLogs.push({
@@ -284,7 +418,7 @@ export default function Module1Page() {
         } else {
           newLogs.push({
             kind: "preview",
-            text: `[preview] sample loaded (index ${sampleRef.current.index_used}); add 'show image' after 'use dataset' to display it`,
+            text: `[preview] sample loaded (index ${sampleRef.current.index_used}); add a visual block after it to actually see the image.`,
           });
         }
 
@@ -310,29 +444,30 @@ export default function Module1Page() {
               datasetKeyRef.current
             )}/grayscale?path=${encodeURIComponent(sampleRef.current.path)}`
           );
-          newLogs.push({ kind: "image", src: gray.image_data_url, caption: "Grayscale preview" });
-        }
-
-        setBaymax("Nice! That chain works. Try showing channels or grayscale to explore.");
-      } else {
-        if (dsChain) {
-          setBaymax(
-            "Great—now connect blocks after ‘use dataset’. Put ‘get sample image’ and ‘show image’ in the same chain."
-          );
-        } else {
-          setBaymax("Start by dragging in ‘use dataset’. Then attach other blocks below it.");
+          newLogs.push({
+            kind: "image",
+            src: gray.image_data_url,
+            caption: "Grayscale preview",
+          });
         }
       }
 
       if (myToken === tokenRef.current) setLogs(newLogs);
+
+      const checklistNow = computeChecklist(ws);
+      setCheckItems(checklistNow);
+      updateBaymaxFromChecklist({
+        dsChain,
+        checkItems: checklistNow,
+        sampleLoaded,
+        showInChain,
+      });
     } catch {
       // ignore transient errors
-    } finally {
-      setCheckItems(computeChecklist(ws));
     }
   }
 
-  /* ---------- Checklist ---------- */
+  /* ---------- Checklist (hidden in UI, but used logically) ---------- */
   function computeChecklist(ws: WorkspaceSvg): StageChecklistItem[] {
     const chains = getTopChains(ws);
     const dsChain = chains.find((ch) => hasType(ch, "dataset.select"));
@@ -358,7 +493,8 @@ export default function Module1Page() {
         const present = hasType(dsChain, it.key);
         if (!present) state = "missing";
         else {
-          const okOrder = isAfter(dsChain, "dataset.select", it.key) || it.key === "dataset.select";
+          const okOrder =
+            isAfter(dsChain, "dataset.select", it.key) || it.key === "dataset.select";
           state = okOrder ? "ok" : "wrong_place";
         }
       }
@@ -374,6 +510,7 @@ export default function Module1Page() {
     if (!ws) return;
 
     setRunning(true);
+    setBaymaxTyping(true);
     try {
       await instantFeedback();
       const items = computeChecklist(ws);
@@ -382,15 +519,28 @@ export default function Module1Page() {
       setSubmitTitle(ok ? "Mission Complete!" : "Keep Exploring");
       setSubmitLines(
         ok
-          ? ["✓ Great work! You explored dataset info, loaded a sample, and visualized it in one chain."]
-          : ["• Some items are missing or not attached after ‘use dataset’. Reorder until they turn green."]
+          ? [
+              "✓ You explored dataset info, class counts, class distribution, loaded a sample, and visualized it in one clean chain.",
+            ]
+          : [
+              "• Some blocks are still missing or not lined up under the dataset in a single chain. Adjust the order and try again.",
+            ]
       );
       setSubmitOpen(true);
-      setBaymax(
-        ok
-          ? "You’ve got the basics! Time to try Module 2 and start preprocessing. 🚀"
-          : "Make sure each block is connected below ‘use dataset’ in the same chain."
-      );
+
+      if (ok) {
+        setBaymax(
+          "Nice work. You’ve basically taught me how to look at a dataset like a tiny researcher. When you’re ready, we can head to Module 2 and start preprocessing."
+        );
+        setBaymaxMood("success");
+        setBaymaxTyping(false);
+      } else {
+        setBaymax(
+          "Not bad at all, just a few pieces out of place. Keep everything under the dataset block and think: info → stats → sample → visuals."
+        );
+        setBaymaxMood("warning");
+        setBaymaxTyping(false);
+      }
 
       if (ok && !module2Unlocked) setModule2Unlocked(true);
     } finally {
@@ -399,89 +549,104 @@ export default function Module1Page() {
   }
 
   /* ---------- UI ---------- */
-  const appBg = dark ? "bg-neutral-950" : "bg-white";
-  const barBg = dark ? "bg-neutral-900 border-neutral-800" : "bg-white border-gray-200";
-  const barText = dark ? "text-neutral-100" : "text-gray-900";
-  const rightBg = dark ? "bg-neutral-950 border-neutral-800" : "bg-gray-50 border-gray-200";
 
   return (
-    <div
-      className={`h-screen w-screen ${appBg}`}
-      style={{
-        display: "grid",
-        gridTemplateColumns: `minmax(0, 1fr) ${sizes.rightWidth}px`,
-        gridTemplateRows: "48px 1fr",
-      }}
-    >
-      {/* Top bar */}
-      <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>VisionBlocks — Module 1: Learn to See</div>
-        <div className="flex gap-2 items-center">
-          {/* Theme toggle */}
-          <button
-            onClick={() => setDark((d) => !d)}
-            className={`px-3 py-1.5 rounded-md border ${
-              dark
-                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                : "border-gray-300 text-gray-800 hover:bg-gray-50"
-            }`}
-            title="Toggle dark mode"
-          >
-            {dark ? "Light" : "Dark"}
-          </button>
-
-          {/* Submit & Run */}
-          <button
-            onClick={() => {
-              if (!running) run();
-            }}
-            className={`px-4 py-1.5 rounded-md ${
-              running ? "opacity-60 cursor-not-allowed" : ""
-            } bg-black text-white`}
-            disabled={running}
-          >
-            {running ? "Submitting…" : "Submit & Run"}
-          </button>
-
-          {/* Module 2 button — exact style/position as StageRunner's Next Stage */}
-          {module2Unlocked ? (
+    <div className="h-screen w-screen bg-[#E3E7F5]">
+      {/* Top nav (matches home style) */}
+      <header className="fixed top-0 left-0 right-0 z-20 backdrop-blur-xl bg-white/70 border-b border-white/60 shadow-sm">
+        <div className="max-w-[1400px] mx-auto px-5 h-16 flex items-center justify-between">
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg font-semibold text-slate-900">VisionBlocks</span>
+            <span className="text-xs text-slate-500">Module 1 · Learn to See</span>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Home button */}
             <button
-              onClick={() => router.push("/module2")}
-              className={`px-4 py-1.5 rounded-md border ${
-                dark
-                  ? "border-emerald-600 text-emerald-300 hover:bg-emerald-900/20"
-                  : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
-              }`}
-              title="Go to Module 2"
+              onClick={() => router.push("/")}
+              className="px-3 py-1.5 rounded-full border border-slate-300 bg-white/80 text-xs font-medium text-slate-700 hover:border-sky-400 hover:text-sky-600 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.45)] transition"
             >
-              Module 2
+              Home
             </button>
-          ) : (
+
+            {/* Submit & Run (green) */}
             <button
-              type="button"
-              aria-disabled="true"
-              className={`px-4 py-1.5 rounded-md border ${
-                dark
-                  ? "border-neutral-700 text-neutral-400 cursor-not-allowed"
-                  : "border-gray-300 text-gray-400 cursor-not-allowed"
-              }`}
-              title="Complete this mission to unlock Module 2"
+              onClick={() => {
+                if (!running) run();
+              }}
+              disabled={running}
+              className={`relative px-4 py-1.5 rounded-full text-sm font-semibold text-white shadow-md transition
+                ${
+                  running
+                    ? "bg-emerald-500/70 cursor-not-allowed"
+                    : "bg-emerald-500 hover:bg-emerald-400 hover:shadow-[0_0_15px_rgba(16,185,129,0.7)]"
+                }`}
             >
-              Module 2
+              <span className="relative z-10">
+                {running ? "Submitting…" : "Submit & Run"}
+              </span>
+              {!running && (
+                <span className="absolute inset-0 rounded-full bg-emerald-400/40 blur-sm opacity-0 hover:opacity-100 transition" />
+              )}
             </button>
-          )}
+
+            {/* Module 2 button (unlocks on success) */}
+            {module2Unlocked ? (
+              <button
+                onClick={() => router.push("/module2")}
+                className="px-4 py-1.5 rounded-full border border-sky-400 bg-white/80 text-sm font-medium text-sky-700 hover:bg-sky-50 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.55)] transition"
+                title="Go to Module 2"
+              >
+                Module 2
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-disabled="true"
+                className="px-4 py-1.5 rounded-full border border-slate-300 bg-white/60 text-sm font-medium text-slate-400 cursor-not-allowed"
+                title="Complete this mission to unlock Module 2"
+              >
+                Module 2
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* Middle: Blockly workspace */}
-      <div ref={blocklyDivRef} className={`relative min-h-0 ${appBg}`} />
+      {/* Main layout */}
+      <div className="pt-20 h-full">
+        <div
+          className="max-w-[1400px] mx-auto px-4 h-[calc(100vh-5rem)] grid gap-4"
+          style={{ gridTemplateColumns: `minmax(0, 1.9fr) minmax(0, 1.2fr)` }}
+        >
+          {/* LEFT: Blockly workspace */}
+          <div className="h-full min-h-0 rounded-3xl bg-white shadow-[0_22px_60px_rgba(15,23,42,0.25)] border border-white/70 overflow-hidden">
+            <div ref={blocklyDivRef} className="w-full h-full min-h-0" />
+          </div>
 
-      {/* Right: Checklist + Output + Baymax */}
-      <div className={`border-l p-3 min-h-0 ${rightBg}`}>
-        <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-          <MissionChecklistStage items={checkItems} dark={dark} />
-          <OutputPanel logs={logs} onClear={() => setLogs([])} dark={dark} />
-          <BaymaxPanel line={baymax} dark={dark} />
+          {/* RIGHT: Baymax + Output (scrollable) */}
+          <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col">
+            <div className="flex flex-col min-h-0 px-4 py-4 gap-4">
+              {/* Baymax “free in the panel” */}
+              <div className="shrink-0">
+                <BaymaxPanel
+                  line={baymax}
+                  mood={baymaxMood}
+                  typing={baymaxTyping}
+                  dark={false}
+                />
+              </div>
+
+              {/* Output takes rest */}
+              <div className="flex-1 min-h-0">
+                <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />
+              </div>
+
+              {/* Hidden checklist – still used, not shown */}
+              <div className="hidden">
+                <MissionChecklistStage items={checkItems} dark={false} />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -490,7 +655,7 @@ export default function Module1Page() {
         open={infoOpen}
         title={infoTitle}
         text={infoText}
-        dark={dark}
+        dark={false}
         onClose={() => setInfoOpen(false)}
       />
 
@@ -498,7 +663,7 @@ export default function Module1Page() {
       <SubmissionModal
         open={submitOpen}
         onClose={() => setSubmitOpen(false)}
-        dark={dark}
+        dark={false}
         title={submitTitle}
         lines={submitLines}
         success={submitSuccess}

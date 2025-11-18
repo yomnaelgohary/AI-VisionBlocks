@@ -1,5 +1,3 @@
-// src/data/module2Stages.ts
-// If you already have this file, replace it fully with this version.
 
 export type Tri = "ok" | "wrong_place" | "missing";
 
@@ -165,7 +163,7 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "Why Normalize Pixel Values?",
       text:
-        "Each pixel starts with values from 0 to 255. That’s fine for images, but large numbers make neural networks unstable, so gradients can explode or vanish during training. Normalization rescales all pixels to a smaller, consistent range such as 0 to 1 or −1 to 1.\n\nThis makes every input image comparable in intensity, helping the model learn faster and more evenly. Think of it like putting all exam scores on a 0–100 scale before averaging them. Normalization ensures fairness and mathematical stability."
+        "Each pixel starts with values from 0 to 255. That’s fine for images, but large numbers make neural networks unstable, so gradients can explode or vanish during training. Normalization rescales all pixels to a smaller, consistent range such as 0 to 1 or -1 to 1.\n\nThis makes every input image comparable in intensity, helping the model learn faster and more evenly. Think of it like putting all exam scores on a 0-100 scale before averaging them. Normalization ensures fairness and mathematical stability."
     },
     requiredBlocks: [
       "m2.to_grayscale",

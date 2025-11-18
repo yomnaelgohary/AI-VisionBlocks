@@ -712,7 +712,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     >
       {/* Top bar */}
       <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>VisionBlocks — Module 2: {stage.title}</div>
+        <div className={`font-semibold ${barText}`}>Module 2 | {stage.title}</div>
         <div className="flex gap-2 items-center">
           {/* Module 2 main page */}
           <button
