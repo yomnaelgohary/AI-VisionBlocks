@@ -6,14 +6,40 @@ import { ChevronRight, BookOpen, Rocket } from "lucide-react";
 
 export default function Module2Index() {
   const stages = [
-    { id: "1", title: "Stage 1: Grayscaling", short: "Turn color images into simpler grayscale versions." },
-    { id: "2", title: "Stage 2: Resizing", short: "Make every image roughly the same size so models don’t freak out." },
-    { id: "3", title: "Stage 3: Padding", short: "Add borders so images fit a target size without stretching." },
-    { id: "4", title: "Stage 4: Brightness & Contrast", short: "Fix images that are too dark, too bright, or too flat." },
-    { id: "5", title: "Stage 5: Blurring & Sharpening", short: "Smooth out noise or sharpen edges to highlight structure." },
-    { id: "6", title: "Stage 6: Normalization", short: "Scale pixel values so the model learns faster and more stably." },
-    { id: "7", title: "Stage 7: Looping & Exporting", short: "Apply your pipeline to the whole dataset and save a new one." },
-    { id: "bonus", title: "Bonus: Edge Detection", short: "Use edge filters to see outlines and structure in images." },
+    {
+      id: "1",
+      title: "Stage 1: Grayscale",
+      short: "Turn color images into simple grayscale so you can focus on shapes and brightness.",
+    },
+    {
+      id: "2",
+      title: "Stage 2: Brightness, Contrast, Blur & Sharpen",
+      short:
+        "Clean up lighting and sharpness with gentle brightness/contrast tweaks and small blur/sharpen filters.",
+    },
+    {
+      id: "3",
+      title: "Stage 3: Resize & Pad",
+      short:
+        "Make images fit a consistent square size by resizing with aspect ratio and padding the rest.",
+    },
+    {
+      id: "4",
+      title: "Stage 4: Normalize",
+      short:
+        "Rescale pixel values to a stable range (like 0–1) so the model trains faster and more smoothly.",
+    },
+    {
+      id: "5",
+      title: "Stage 5: Looping & Exporting",
+      short:
+        "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
+    },
+    {
+      id: "bonus",
+      title: "Bonus: Edge Detection",
+      short: "Use edge filters to highlight outlines and structure in your images.",
+    },
   ];
 
   return (
@@ -29,7 +55,10 @@ export default function Module2Index() {
           </div>
 
           <nav className="flex items-center gap-4 text-sm font-medium text-gray-700">
-            <Link href="/" className="px-3 py-1 rounded-full hover:bg-white/70 hover:text-sky-600 transition">
+            <Link
+              href="/"
+              className="px-3 py-1 rounded-full hover:bg-white/70 hover:text-sky-600 transition"
+            >
               Home
             </Link>
             <Link href="/module1" className="hover:text-sky-500 transition">
@@ -70,8 +99,8 @@ export default function Module2Index() {
         </h1>
 
         <p className="text-gray-600 mt-4 text-base md:text-lg max-w-3xl">
-          In Module 2, you’ll practice each preprocessing idea in its own mini-mission. 
-          By the end, you’ll be able to build a full pipeline that prepares a dataset 
+          In Module 2, you’ll practice each preprocessing idea in its own mini-mission.
+          By the end, you’ll be able to build a full pipeline that prepares a dataset
           for training, and export your own processed dataset for later modules.
         </p>
 
@@ -88,6 +117,9 @@ export default function Module2Index() {
             const gradientBg = isBonus
               ? "from-purple-200/70 via-sky-100/60 to-white/80"
               : "from-sky-200/70 via-purple-100/60 to-white/80";
+
+            // For non-bonus, core stage number = index in this list + 1 (since bonus is at the end)
+            const coreLabel = isBonus ? "" : `Core stage ${index + 1}`;
 
             return (
               <motion.div
@@ -128,7 +160,7 @@ export default function Module2Index() {
                           {stage.title}
                         </h2>
                         <p className="text-[11px] text-gray-500">
-                          {isBonus ? "Challenge mission" : `Core stage ${index + 1}`}
+                          {isBonus ? "Challenge mission" : coreLabel}
                         </p>
                       </div>
                     </div>
@@ -150,8 +182,8 @@ export default function Module2Index() {
                     <div className="flex flex-col">
                       <span className="text-xs text-gray-500">
                         {isBonus
-                          ? "Try after Stage 7"
-                          : "Recommended order: do them in sequence"}
+                          ? "Try this after Stage 5"
+                          : "Recommended: follow the stages in order"}
                       </span>
                     </div>
                     <span className="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:text-sky-700">
@@ -167,7 +199,7 @@ export default function Module2Index() {
 
         {/* Small footer hint */}
         <p className="text-xs text-gray-500 mt-4">
-          Tip: You can always come back here to replay any stage or jump straight to the bonus
+          Tip: You can always come back here to replay any stage or jump into the bonus
           once you’re comfortable with the main pipeline.
         </p>
       </main>
@@ -175,9 +207,9 @@ export default function Module2Index() {
       {/* Global background animation (shared with home style) */}
       <style jsx global>{`
         .animated-bg {
-          background: radial-gradient(circle at 20% 20%, #4BA3E480, transparent 65%),
-                      radial-gradient(circle at 80% 20%, #8B6FF680, transparent 65%),
-                      radial-gradient(circle at 50% 85%, #BDC2D0, #D0D4DF);
+          background: radial-gradient(circle at 20% 20%, #4ba3e480, transparent 65%),
+            radial-gradient(circle at 80% 20%, #8b6ff680, transparent 65%),
+            radial-gradient(circle at 50% 85%, #bdc2d0, #d0d4df);
           background-size: 200% 200%;
           animation: hueShift 18s ease-in-out infinite alternate;
         }

@@ -109,8 +109,6 @@ export default function SubmissionModal({
 
             {isSuccess ? (
               <p className={`mt-1 text-xs ${textSub}`}>
-                You wired the whole “learn to see” chain dataset, stats, and image views,
-                in one clean line. That’s exactly what Module 1 was aiming for.
               </p>
             ) : (
               <p className={`mt-1 text-xs ${textSub}`}>

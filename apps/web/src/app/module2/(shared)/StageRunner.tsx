@@ -156,6 +156,10 @@ function findBlockByTypeInChain(
   return null;
 }
 
+/* ----------------- Baymax mood ----------------- */
+
+type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
+
 /* ----------------- Component ----------------- */
 
 export default function StageRunner({ stageId }: { stageId: string }) {
@@ -175,10 +179,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
 
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(false); // keep API compatibility, but UI stays light
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<LogItem[]>([]);
-  const [baymax, setBaymax] = useState("Let’s solve this stage together!");
+
+  const [baymax, setBaymax] = useState<string>(
+    "This stage is all about shaping the image before the model sees it. Start by chaining your preprocessing blocks under the sample image."
+  );
+  const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
+  const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTitle, setInfoTitle] = useState<string>();
@@ -203,20 +212,22 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const genTokenRef = useRef(0);
   const lastCtxSigRef = useRef<string>("");
 
-  const sizes = useMemo(() => ({ rightWidth: 380 }), []);
+  const sizes = useMemo(() => ({ rightWidth: 420 }), []);
+
+  const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
 
   /* ---------- Blockly inject + listeners ---------- */
   useEffect(() => {
-    if (!stage) return;
+    if (!stage || !blocklyDivRef.current) return;
 
     // reset image state + tokens on stage change
     lastCtxSigRef.current = "";
     genTokenRef.current++;
     setTargetSrc(undefined);
     setCurrentSrc(undefined);
-    setCanGoNext(false); // new stage => must complete again
+    setCanGoNext(false);
 
-    const ws = Blockly.inject(blocklyDivRef.current!, {
+    const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
       renderer: "zelos",
       theme: dark ? DarkTheme : LightTheme,
@@ -244,13 +255,17 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         if (stage?.type === "pipeline") {
           previewPipelineDebounced();
         }
-        setCheckItems(computeChecklist(ws, stage));
+        const items = computeChecklist(ws, stage);
+        setCheckItems(items);
+        updateBaymaxFromChecklist(stage, items);
       }, 200);
     };
     ws.addChangeListener(onChange);
 
-    // initial checklist
-    setCheckItems(computeChecklist(ws, stage));
+    // initial checklist + Baymax text
+    const initialItems = computeChecklist(ws, stage);
+    setCheckItems(initialItems);
+    updateBaymaxFromChecklist(stage, initialItems);
 
     return () => {
       window.removeEventListener("vb:blockInfo", onInfo as any);
@@ -408,8 +423,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   /* ---------- Checklist (tri-state) ---------- */
 
-  const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
-
   function paramMismatch(block: BlocklyBlock | null, spec?: OpSpec): boolean {
     if (!block || !spec) return false;
 
@@ -493,7 +506,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         });
       });
     } else {
-      // Stage 7
+      // Loop + export stage
       const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
       const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
@@ -546,10 +559,111 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     return items;
   }
 
+  /* ---------- Baymax driven by checklist ---------- */
+
+  function updateBaymaxFromChecklist(s: StageConfig, items: StageChecklistItem[]) {
+    const done = items.filter((i) => i.state === "ok").length;
+    const missing = items.filter((i) => i.state === "missing");
+    const wrong = items.filter((i) => i.state === "wrong_place");
+
+    const stageKey = String(s.id);
+
+    // No required items (fallback)
+    if (items.length === 0) {
+      setBaymax("Drag your preprocessing blocks into a single chain under the sample image. Each stage builds on the previous one.");
+      setBaymaxMood("neutral");
+      setBaymaxTyping(false);
+      return;
+    }
+
+    // If some blocks are present but in the wrong place
+    if (wrong.length > 0) {
+      setBaymax(
+        "You dropped some good blocks, but the order feels off. Try keeping them in one straight line, and think: earlier steps closer to the sample image, later tweaks lower in the chain."
+      );
+      setBaymaxMood("warning");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // Handle missing blocks with stage-specific vibes (but no exact block names)
+    if (missing.length > 0) {
+      const firstMissing = missing[0];
+
+      if (s.type === "loop_export") {
+        setBaymax(
+          "For this mission we want the whole preprocessing recipe running inside the loop, then a final step after it that saves everything as a new dataset. Check that all the key steps made it into the loop body."
+        );
+        setBaymaxMood("hint");
+        setBaymaxTyping(true);
+        return;
+      }
+
+      // Pipeline stages
+      if (stageKey === "1") {
+        setBaymax(
+          "This stage is about stripping away color so we only care about light and dark. Make sure your chain includes a step that simplifies the image like that, after the sample image."
+        );
+      } else if (stageKey === "2") {
+        setBaymax(
+          "Here we’re doing gentle cleanup, small brightness/contrast tweaks and maybe smoothing or sharpening. Check that the chain actually includes a lighting tweak and an edge/detail tweak."
+        );
+      } else if (stageKey === "3") {
+        setBaymax(
+          "We’re trying to get everything into a comfy, square frame. Ask yourself: do I have steps that control size and how empty space is handled around the image?"
+        );
+      } else if (stageKey === "4") {
+        setBaymax(
+          "The goal now is to get pixel values into a nice, consistent numeric range. Look for the step that rescales numbers rather than changing how the image looks."
+        );
+      } else if (stageKey === "5") {
+        setBaymax(
+          "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini preprocessing pipeline, and there should be a save step after the loop."
+        );
+      } else if (stageKey === "bonus") {
+        setBaymax(
+          "Bonus time: we’re hunting for outlines. Check that your chain includes a step that focuses on edges and structure, not brightness or size."
+        );
+      } else {
+        setBaymax(
+          "Some of the core steps for this mission are still missing. Compare what the intro says you should practice with what you actually dropped into the chain."
+        );
+      }
+
+      setBaymaxMood("hint");
+      setBaymaxTyping(true);
+      return;
+    }
+
+    // All required blocks present and in order
+    if (done === items.length && items.length > 0) {
+      if (s.type === "loop_export") {
+        setBaymax(
+          "Nice, you’ve turned your preprocessing into a full-on production line and saved out a new dataset. Hit Submit & Run when you’re ready to process the real thing."
+        );
+      } else {
+        setBaymax(
+          "This chain looks solid for this stage. If the target image on the right matches what you’re getting, you’re good to go. Try Submit & Run."
+        );
+      }
+      setBaymaxMood("success");
+      setBaymaxTyping(false);
+      return;
+    }
+
+    // Fallback “almost there”
+    setBaymax(
+      "You’re close. Keep everything in one chain under the sample image and ask: have I covered all the steps this stage talks about, in a sensible order?"
+    );
+    setBaymaxMood("neutral");
+    setBaymaxTyping(true);
+  }
+
   /* ---------- Submit & Run ---------- */
   async function run() {
     if (!stage || !workspaceRef.current) return;
     setRunning(true);
+    setBaymaxTyping(true);
 
     try {
       const ws = workspaceRef.current;
@@ -564,7 +678,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const top = findFirstPipelineTop(ws);
         if (!top || !datasetKeyRef.current || !sampleRef.current) {
           ok = false;
-          lines.push("• Make sure the dataset & sample blocks are connected to a preprocessing chain.");
+          lines.push("• Make sure the dataset, sample, and preprocessing blocks are connected in one chain.");
         } else {
           const ops = blocksToOps(top);
           const resp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
@@ -580,19 +694,23 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
           const itemsNow = computeChecklist(ws, stage);
           setCheckItems(itemsNow);
-          ok = ok && itemsNow.every((i) => i.state === "ok");
+          const allOk = itemsNow.every((i) => i.state === "ok");
+          ok = ok && allOk;
 
-          if (ok) lines.push("✓ All required blocks used in the correct order. Great job!");
-          else lines.push("• Some items are missing, out of order, or have incorrect settings (Blocks in the wrong order or with incorrect settings are marked with “–”).");
+          if (!allOk) {
+            lines.push(
+              "• Some preprocessing steps are missing or not in the right place. Check the mission text and Baymax’s hints, then adjust your chain."
+            );
+          }
         }
       } else {
-        // Stage 7
+        // Loop + export stage
         const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
         const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
 
         if (!loopBlock) {
           ok = false;
-          lines.push("• Add the loop block and put the preprocessing pipeline inside it.");
+          lines.push("• Add the loop block and put your preprocessing pipeline inside it.");
         } else {
           const inner = loopBlock.getInputTargetBlock("DO");
           const ops = blocksToOps(inner);
@@ -637,42 +755,108 @@ export default function StageRunner({ stageId }: { stageId: string }) {
               }),
             });
 
-          newLogs.push({
-            kind: "card",
-            title: "Export Complete",
-            lines: [
-              `New dataset: ${resp.new_dataset_key}`,
-              `Images processed: ${resp.processed}`,
-              `Classes: ${resp.classes.join(", ") || "(none)"}`,
-            ],
-          });
-
+            newLogs.push({
+              kind: "card",
+              title: "Export Complete",
+              lines: [
+                `New dataset: ${resp.new_dataset_key}`,
+                `Images processed: ${resp.processed}`,
+                `Classes: ${resp.classes.join(", ") || "(none)"}`,
+              ],
+            });
           } else if (!structureOK) {
             ok = false;
-            lines.push("• Fix the checklist items (pipeline must be inside loop; correct order; export after loop).");
+            lines.push(
+              "• The loop body should contain the full preprocessing recipe, and there should be a save step right after the loop."
+            );
           } else if (!datasetKeyRef.current) {
             ok = false;
-            lines.push("• Add a 'use dataset' block so I know which dataset to process.");
+            lines.push("• Add a 'use dataset' block so we know which dataset to loop over.");
           } else if (!exportBlock) {
             ok = false;
-            lines.push("• Add 'export processed dataset' after the loop.");
+            lines.push("• Add a block after the loop that saves the processed dataset.");
           }
         }
       }
 
-      setSubmitSuccess(ok);
-      setCanGoNext(ok); // enable Next Stage on success
-      setSubmitTitle(ok ? "Stage Complete!" : "Keep Going");
-      setSubmitLines(lines);
+      // Stage-specific submission copy
+      const stageKey = String(stage.id);
+
+      if (ok) {
+        setSubmitSuccess(true);
+
+        if (stage.type === "loop_export") {
+          setSubmitTitle("Stage Complete - Pipeline on repeat!");
+          setSubmitLines([
+            "✓ You wrapped the preprocessing steps inside a loop and exported a new dataset. This is exactly how real ML pipelines get their data ready.",
+          ]);
+        } else if (stageKey === "1") {
+          setSubmitTitle("Stage 1 Complete - Seeing in grayscale");
+          setSubmitLines([
+            "✓ You built a pipeline that reduces the image to light and dark while keeping the structure clear. Great base step for later stages.",
+          ]);
+        } else if (stageKey === "2") {
+          setSubmitTitle("Stage 2 Complete - Clean up the signal");
+          setSubmitLines([
+            "✓ You added gentle lighting and detail tweaks so images are clearer without being over-edited.",
+          ]);
+        } else if (stageKey === "3") {
+          setSubmitTitle("Stage 3 Complete - Frame locked in");
+          setSubmitLines([
+            "✓ Your pipeline now shapes images into a consistent square space without weird stretching.",
+          ]);
+        } else if (stageKey === "4") {
+          setSubmitTitle("Stage 4 Complete - Numbers under control");
+          setSubmitLines([
+            "✓ You normalized pixel values into a stable range, which helps training behave nicely later.",
+          ]);
+        } else if (stageKey === "bonus") {
+          setSubmitTitle("Bonus Stage Complete - Edge detective");
+          setSubmitLines([
+            "✓ You used an edge-focused pipeline to highlight outlines and structure. This is a powerful optional trick for shape-heavy tasks.",
+          ]);
+        } else {
+          setSubmitTitle("Stage Complete!");
+          setSubmitLines(["✓ All required preprocessing steps are in place for this mission."]);
+        }
+
+        setCanGoNext(true);
+        setLogs((prev) => [...prev, ...newLogs]);
+        setBaymax(
+          stage.type === "loop_export"
+            ? "That’s a full preprocessing production line right there. Your dataset is officially glow-up ready for training."
+            : "Nice, this stage’s pipeline looks solid. When you’re ready, we can hop to the next mission and layer more steps on top."
+        );
+        setBaymaxMood("success");
+        setBaymaxTyping(false);
+      } else {
+        setSubmitSuccess(false);
+        setSubmitTitle("Keep tuning this stage");
+        if (lines.length === 0) {
+          lines.push(
+            "• Some core steps for this stage are still missing or out of order. Check Baymax’s hints on the right and tweak your chain."
+          );
+        }
+        setSubmitLines(lines);
+        setLogs((prev) => [...prev, ...newLogs]);
+        setBaymax(
+          "You’re not far off. Check the mission description, follow the target image, and treat Baymax’s hints as gentle nudges, not spoilers."
+        );
+        setBaymaxMood("warning");
+        setBaymaxTyping(false);
+        setCanGoNext(false);
+      }
+
       setSubmitOpen(true);
-      setLogs((prev) => [...prev, ...newLogs]);
-      setBaymax(ok ? "Great job! That pipeline looks perfect. 🎉" : "Try reordering blocks or adjusting settings until the checklist turns green.");
     } catch (e: any) {
       setSubmitSuccess(false);
       setCanGoNext(false);
-      setSubmitTitle("Error");
+      setSubmitTitle("Error while running");
       setSubmitLines([e?.message || String(e)]);
       setSubmitOpen(true);
+      setBaymax("Something broke while running the pipeline. Fix any obvious errors and try again.");
+      setBaymaxMood("error");
+      setBaymaxTyping(false);
     } finally {
       setRunning(false);
     }
@@ -683,11 +867,14 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     router.push("/module2");
   }
 
+  function goHome() {
+    router.push("/");
+  }
+
   function goNext() {
     if (nextStage) {
       router.push(`/module2/${nextStage.id}`);
     } else {
-      // no next stage → back to module home
       router.push("/module2");
     }
   }
@@ -696,153 +883,157 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
 
-  const appBg = dark ? "bg-neutral-950" : "bg-white";
-  const barBg = dark ? "bg-neutral-900 border-neutral-800" : "bg-white border-gray-200";
-  const barText = dark ? "text-neutral-100" : "text-gray-900";
-  const rightBg = dark ? "bg-neutral-950 border-neutral-800" : "bg-gray-50 border-gray-200";
-
   return (
-    <div
-      className={`h-screen w-screen ${appBg}`}
-      style={{
-        display: "grid",
-        gridTemplateColumns: `minmax(0, 1fr) ${sizes.rightWidth}px`,
-        gridTemplateRows: "48px 1fr",
-      }}
-    >
-      {/* Top bar */}
-      <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>Module 2 | {stage.title}</div>
-        <div className="flex gap-2 items-center">
-          {/* Module 2 main page */}
-          <button
-            onClick={goModuleHome}
-            className={`px-3 py-1.5 rounded-md border ${
-              dark
-                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                : "border-gray-300 text-gray-800 hover:bg-gray-50"
-            }`}
-            title="Back to Module 2"
-          >
-            Module 2
-          </button>
-
-          {/* Dark/Light toggle */}
-          <button
-            onClick={() => setDark((d) => !d)}
-            className={`px-3 py-1.5 rounded-md border ${
-              dark
-                ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                : "border-gray-300 text-gray-800 hover:bg-gray-50"
-            }`}
-            title="Toggle dark mode"
-          >
-            {dark ? "Light" : "Dark"}
-          </button>
-
-          {/* Submit & Run */}
-          <button
-            onClick={() => {
-              if (!running) run();
-            }}
-            className={`px-4 py-1.5 rounded-md ${
-              running ? "opacity-60 cursor-not-allowed" : ""
-            } bg-black text-white`}
-            disabled={running}
-          >
-            {running ? "Submitting…" : "Submit & Run"}
-          </button>
-
-          {/* Next Stage */}
-          <button
-            onClick={goNext}
-            disabled={!canGoNext}
-            className={`px-4 py-1.5 rounded-md border ${
-              canGoNext
-                ? dark
-                  ? "border-emerald-600 text-emerald-300 hover:bg-emerald-900/20"
-                  : "border-emerald-500 text-emerald-700 hover:bg-emerald-50"
-                : dark
-                  ? "border-neutral-700 text-neutral-400 cursor-not-allowed"
-                  : "border-gray-300 text-gray-400 cursor-not-allowed"
-            }`}
-            title={
-              canGoNext
-                ? nextStage
-                  ? `Go to Stage ${nextStage.id}: ${nextStage.title}`
-                  : "Finish Module"
-                : "Complete this stage to unlock the next one"
-            }
-          >
-            {nextStage ? "Next Stage" : "Finish Module"}
-          </button>
-        </div>
-      </div>
-
-      {/* Workspace */}
-      <div
-        ref={blocklyDivRef}
-        className={`relative min-h-0 ${dark ? "bg-neutral-950" : "bg-white"}`}
-      />
-
-      {/* Right column */}
-      <div className={`border-l p-3 min-h-0 ${rightBg}`}>
-        <div className="h-full min-h-0 flex flex-col gap-4 overflow-y-auto pr-1">
-          {/* Intro card */}
-          <div
-            className={`rounded-xl border p-3 ${
-              dark ? "border-neutral-800 bg-neutral-900/50" : "border-gray-200 bg-white"
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <h3 className={`font-semibold ${dark ? "text-neutral-100" : "text-gray-900"}`}>
-                {stage.title}
-              </h3>
-
-              {/* Stage Help button */}
-              <button
-                aria-label="Stage help"
-                onClick={() => {
-                  if (stage?.help) {
-                    setInfoTitle(stage.help.title);
-                    setInfoText(stage.help.text);
-                    setInfoOpen(true);
-                  }
-                }}
-                className={`h-8 w-8 rounded-full flex items-center justify-center border text-sm
-                  ${
-                    dark
-                      ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800"
-                      : "border-gray-300 text-gray-800 hover:bg-gray-50"
-                  }`}
-                title="What does this stage teach?"
-              >
-                ?
-              </button>
-            </div>
-
-            <ul
-              className={`list-disc ml-5 mt-2 text-sm ${
-                dark ? "text-neutral-300" : "text-gray-700"
-              }`}
+    <div className="h-screen w-screen bg-[#E3E7F5] overflow-hidden">
+      {/* Top nav – styled like Module 1’s, but for Module 2 */}
+      <header className="fixed top-0 left-0 right-0 z-20 backdrop-blur-xl bg-white/70 border-b border-white/60 shadow-sm">
+        <div className="max-w-[1400px] mx-auto px-5 h-16 flex items-center justify-between">
+          <div className="flex items-baseline gap-2">
+            <span className="text-lg font-semibold text-slate-900">VisionBlocks</span>
+            <span className="text-xs text-slate-500">
+              Module 2 · Image preprocessing · {stage.title}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Home button */}
+            <button
+              onClick={goHome}
+              className="px-3 py-1.5 rounded-full border border-slate-300 bg-white/80 text-xs font-medium text-slate-700 hover:border-sky-400 hover:text-sky-600 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.45)] transition"
             >
-              {stage.intro.map((t, i) => (
-                <li key={i}>{t}</li>
-              ))}
-            </ul>
+              Home
+            </button>
+
+            {/* Module 2 main page */}
+            <button
+              onClick={goModuleHome}
+              className="px-3 py-1.5 rounded-full border border-slate-300 bg-white/80 text-xs font-medium text-slate-700 hover:border-sky-400 hover:text-sky-600 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.45)] transition"
+            >
+              Module 2
+            </button>
+
+            {/* Submit & Run (neon-ish green) */}
+            <button
+              onClick={() => {
+                if (!running) run();
+              }}
+              disabled={running}
+              className={`relative px-4 py-1.5 rounded-full text-sm font-semibold text-white shadow-md transition
+                ${
+                  running
+                    ? "bg-emerald-500/70 cursor-not-allowed"
+                    : "bg-emerald-500 hover:bg-emerald-400 hover:shadow-[0_0_18px_rgba(16,185,129,0.75)]"
+                }`}
+            >
+              <span className="relative z-10">
+                {running ? "Submitting…" : "Submit & Run"}
+              </span>
+              {!running && (
+                <span className="absolute inset-0 rounded-full bg-emerald-400/50 blur-sm opacity-0 hover:opacity-100 transition" />
+              )}
+            </button>
+
+            {/* Next Stage */}
+            <button
+              onClick={goNext}
+              disabled={!canGoNext}
+              className={`px-4 py-1.5 rounded-full border text-sm font-medium transition
+                ${
+                  canGoNext
+                    ? "border-sky-400 bg-white/85 text-sky-700 hover:bg-sky-50 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.55)]"
+                    : "border-slate-300 bg-white/60 text-slate-400 cursor-not-allowed"
+                }`}
+              title={
+                canGoNext
+                  ? nextStage
+                    ? `Go to Stage ${nextStage.id}: ${nextStage.title}`
+                    : "Finish Module"
+                  : "Complete this stage to unlock the next one"
+              }
+            >
+              {nextStage ? "Next Stage" : "Finish Module"}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main layout (like Module 1) */}
+      <div className="pt-20 h-full">
+        <div
+          className="max-w-[1400px] mx-auto px-4 h-[calc(100vh-5rem)] grid gap-4"
+          style={{ gridTemplateColumns: `minmax(0, 1.9fr) minmax(0, 1.2fr)` }}
+        >
+          {/* LEFT: Blockly workspace */}
+          <div className="h-full min-h-0 rounded-3xl bg-white shadow-[0_22px_60px_rgba(15,23,42,0.25)] border border-white/70 overflow-hidden">
+            <div ref={blocklyDivRef} className="w-full h-full min-h-0" />
           </div>
 
-          {/* Checklist */}
-          <MissionChecklistStage items={checkItems} dark={dark} />
+          {/* RIGHT: intro + Baymax + target + output */}
+          <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col">
+            <div className="flex flex-col min-h-0 px-4 py-4 gap-4">
+              {/* Stage intro card */}
+              <div className="shrink-0 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">
+                      {stage.title}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Use the blocks to build the preprocessing steps described here. Try to make your result match the target image.
+                    </p>
+                  </div>
+                  {/* Stage help */}
+                  <button
+                    aria-label="Stage help"
+                    onClick={() => {
+                      if (stage?.help) {
+                        setInfoTitle(stage.help.title);
+                        setInfoText(stage.help.text);
+                        setInfoOpen(true);
+                      }
+                    }}
+                    className="h-8 w-8 rounded-full flex items-center justify-center border border-slate-200 text-sm text-slate-700 bg-white/80 hover:bg-slate-50 transition"
+                    title="What does this stage teach?"
+                  >
+                    ?
+                  </button>
+                </div>
+                <ul className="list-disc ml-5 mt-2 text-xs text-slate-700">
+                  {stage.intro.map((t, i) => (
+                    <li key={i}>{t}</li>
+                  ))}
+                </ul>
+              </div>
 
-          {/* Target/current only for pipeline stages */}
-          {stage.type === "pipeline" ? (
-            <TargetPanel targetSrc={targetSrc} currentSrc={currentSrc} dark={dark} />
-          ) : null}
+              {/* Baymax helper */}
+              <div className="shrink-0">
+                <BaymaxPanel
+                  line={baymax}
+                  mood={baymaxMood}
+                  typing={baymaxTyping}
+                  dark={false}
+                />
+              </div>
 
-          {/* Output + Baymax */}
-          <OutputPanel logs={logs} onClear={() => setLogs([])} dark={dark} />
-          <BaymaxPanel line={baymax} dark={dark} />
+              {/* Target vs current (pipeline stages only) */}
+              {stage.type === "pipeline" && (
+                <TargetPanel
+                  targetSrc={targetSrc}
+                  currentSrc={currentSrc}
+                  dark={false}
+                />
+              )}
+
+              {/* Output panel */}
+              <div className="flex-1 min-h-0">
+                <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />
+              </div>
+
+              {/* Hidden checklist – used logically but not shown */}
+              <div className="hidden">
+                <MissionChecklistStage items={checkItems} dark={false} />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -851,7 +1042,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         open={infoOpen}
         title={infoTitle}
         text={infoText}
-        dark={dark}
+        dark={false}
         onClose={() => setInfoOpen(false)}
       />
 
@@ -859,7 +1050,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       <SubmissionModal
         open={submitOpen}
         onClose={() => setSubmitOpen(false)}
-        dark={dark}
+        dark={false}
         title={submitTitle}
         lines={submitLines}
         success={submitSuccess}
