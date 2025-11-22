@@ -74,6 +74,34 @@ type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
 
 type CardPos = { top: number; left: number } | null;
 
+// Mission-critical block types (for glow + counter)
+const REQUIRED_MISSION_KEYS = [
+  "dataset.select",
+  "dataset.info",
+  "dataset.class_counts",
+  "dataset.class_distribution_preview",
+  "dataset.sample_image",
+  "image.channels_split",
+];
+
+// Which blocks glow in the toolbox (same as required for stage)
+const REQUIRED_TOOLBOX_BLOCK_TYPES = new Set<string>(REQUIRED_MISSION_KEYS);
+
+// Friendly names for Baymax messages
+const FRIENDLY_NAMES: Record<string, string> = {
+  "dataset.select": "“use dataset”",
+  "dataset.info": "“dataset info”",
+  "dataset.class_counts": "“class counts”",
+  "dataset.class_distribution_preview": "“class distribution preview”",
+  "dataset.sample_image": "“get sample image”",
+  "image.channels_split": "“split RGB channels”",
+};
+
+// Helper to randomise lines a bit
+function pickOne(options: string[]): string {
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 export default function Module1Page() {
   const router = useRouter();
 
@@ -93,6 +121,10 @@ export default function Module1Page() {
   );
   const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
   const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
+
+  // Baymax animation
+  const [baymaxBump, setBaymaxBump] = useState(false);
+  const lastBaymaxTextRef = useRef<string>(baymax);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTitle, setInfoTitle] = useState<string>();
@@ -117,13 +149,90 @@ export default function Module1Page() {
   const lastSigRef = useRef<string>("");
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
+  const lastChecklistRef = useRef<StageChecklistItem[] | null>(null);
 
   /* ---------- Tutorial state ---------- */
   const [tutorialPromptOpen, setTutorialPromptOpen] = useState(true);
   const [tutorialActive, setTutorialActive] = useState(false);
-  const [tutorialStep, setTutorialStep] = useState<number>(2); // 1..4 = toolbox, workspace, Baymax, output
+  const [tutorialStep, setTutorialStep] = useState<number>(2);
   const [focusRect, setFocusRect] = useState<DOMRect | null>(null);
   const [cardPos, setCardPos] = useState<CardPos>(null);
+
+  /* ---------- Global CSS for glow + Baymax animation ---------- */
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const existing = document.getElementById("vb-mission-glow-style");
+    if (existing) return;
+
+    const style = document.createElement("style");
+    style.id = "vb-mission-glow-style";
+    style.textContent = `
+      @keyframes vb-mission-breathe {
+        0%   { filter: drop-shadow(0 0 0 rgba(251,191,36,0)); }
+        50%  { filter: drop-shadow(0 0 12px rgba(251,191,36,0.85)); }
+        100% { filter: drop-shadow(0 0 22px rgba(251,191,36,1)); }
+      }
+      .vb-mission-glow-block .blocklyPath {
+        stroke: #fbbf24 !important;
+        stroke-width: 2.4px;
+        animation: vb-mission-breathe 1.6s ease-in-out infinite alternate;
+      }
+
+      @keyframes vb-baymax-pop {
+        0%   { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(56,189,248,0); }
+        35%  { transform: translateY(-6px) scale(1.04); box-shadow: 0 14px 30px rgba(56,189,248,0.7); }
+        100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(56,189,248,0); }
+      }
+      .vb-baymax-bump {
+        animation: vb-baymax-pop 0.5s ease-out;
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  /* ---------- Helper: highlight needed blocks in the toolbox flyout ---------- */
+  function updateToolboxGlow() {
+    const wsAny = workspaceRef.current as any;
+    if (!wsAny) return;
+
+    const flyout =
+      wsAny.getFlyout?.() ||
+      wsAny.toolbox_?.flyout_ ||
+      wsAny.toolbox_?.getFlyout?.();
+    if (!flyout) return;
+
+    const flyWs = flyout.getWorkspace?.();
+    if (!flyWs) return;
+
+    const topBlocks = flyWs.getTopBlocks(false) || [];
+    topBlocks.forEach((b: any) => {
+      const svgRoot = b.getSvgRoot?.();
+      if (!svgRoot) return;
+
+      if (REQUIRED_TOOLBOX_BLOCK_TYPES.has(b.type)) {
+        svgRoot.classList.add("vb-mission-glow-block");
+      } else {
+        svgRoot.classList.remove("vb-mission-glow-block");
+      }
+    });
+  }
+
+  /* ---------- Helper: set Baymax with animation ---------- */
+  function setBaymaxState(text: string, mood: BaymaxMood, typing: boolean) {
+    setBaymax(text);
+    setBaymaxMood(mood);
+    setBaymaxTyping(typing);
+
+    if (text !== lastBaymaxTextRef.current) {
+      lastBaymaxTextRef.current = text;
+      // Restart bump animation
+      setBaymaxBump(false);
+      requestAnimationFrame(() => {
+        setBaymaxBump(true);
+        setTimeout(() => setBaymaxBump(false), 500);
+      });
+    }
+  }
 
   /* ---------- Inject Blockly ---------- */
   useEffect(() => {
@@ -142,6 +251,11 @@ export default function Module1Page() {
       (ws as any).scrollCenter?.();
     } catch {}
 
+    // initial toolbox glow once flyout exists
+    setTimeout(() => {
+      updateToolboxGlow();
+    }, 0);
+
     const onInfo = (e: any) => {
       const { title, text } = e?.detail ?? {};
       setInfoTitle(title || "About this block");
@@ -155,6 +269,11 @@ export default function Module1Page() {
       debounceRef.current = setTimeout(() => {
         instantFeedback();
       }, 250);
+
+      // refresh toolbox glow after changes / category switches
+      setTimeout(() => {
+        updateToolboxGlow();
+      }, 0);
     };
     ws.addChangeListener(onChange);
 
@@ -198,7 +317,6 @@ export default function Module1Page() {
       setFocusRect(getDefaultRect());
     }
   }
-
 
   useEffect(() => {
     if (!tutorialActive) {
@@ -258,33 +376,31 @@ export default function Module1Page() {
     setCardPos({ top, left });
   }, [tutorialActive, focusRect, tutorialStep]);
 
-    function renderTutorialTitle(step: number): string {
-      switch (step) {
-        case 2:
-          return "This is your building area";
-        case 3:
-          return "Meet Baymax 👋";
-        case 4:
-          return "See what your blocks do";
-        default:
-          return "Welcome to VisionBlocks";
-      }
+  function renderTutorialTitle(step: number): string {
+    switch (step) {
+      case 2:
+        return "This is your building area";
+      case 3:
+        return "Meet Baymax 👋";
+      case 4:
+        return "See what your blocks do";
+      default:
+        return "Welcome to VisionBlocks";
     }
+  }
 
-
-    function renderTutorialBody(step: number): string {
-      switch (step) {
-        case 2:
-          return "This area includes both the toolbox on the left and the main workspace. You'll drag blocks from the toolbox and snap them together in this space to build your computer-vision pipeline. Try to keep everything hanging from a single “use dataset” block so the robot knows what to work on.";
-        case 3:
-          return "Baymax watches what you build and gives hints if something’s missing or out of order. When you’re stuck, check this panel first.";
-        case 4:
-          return "The output panel shows dataset cards, charts, and image previews your blocks produce. It’s where you see the results of your chain.";
-        default:
-          return "We’ll take a super quick tour of the interface, then you’ll be ready to explore the mission.";
-      }
+  function renderTutorialBody(step: number): string {
+    switch (step) {
+      case 2:
+        return "This area includes both the toolbox on the left and the main workspace. You'll drag blocks from the toolbox and snap them together in this space to build your computer-vision pipeline. Try to keep everything hanging from a single “use dataset” block so the robot knows what to work on.";
+      case 3:
+        return "Baymax watches what you build and gives hints if something’s missing or out of order. When you’re stuck, check this panel first.";
+      case 4:
+        return "The output panel shows dataset cards, charts, and image previews your blocks produce. It’s where you see the results of your chain.";
+      default:
+        return "We’ll take a super quick tour of the interface, then you’ll be ready to explore the mission.";
     }
-
+  }
 
   function handleTutorialPrimary() {
     // Next or finish
@@ -313,9 +429,9 @@ export default function Module1Page() {
     dsChain?: BlocklyBlock[];
     checkItems: StageChecklistItem[];
     sampleLoaded: boolean;
-    showInChain: boolean;
+    prevCheckItems?: StageChecklistItem[];
   }) {
-    const { dsChain, checkItems, sampleLoaded, showInChain } = args;
+    const { dsChain, checkItems, sampleLoaded, prevCheckItems } = args;
     const done = checkItems.filter((i) => i.state === "ok").length;
 
     const missingKeys = checkItems
@@ -325,112 +441,225 @@ export default function Module1Page() {
       .filter((i) => i.state === "wrong_place")
       .map((i) => i.key);
 
+    // In mission order, so we can talk about "next"
+    const missionOrder = [
+      "dataset.select",
+      "dataset.info",
+      "dataset.class_counts",
+      "dataset.class_distribution_preview",
+      "dataset.sample_image",
+      "image.channels_split",
+    ] as const;
+
+    const firstMissing = missionOrder.find((k) => missingKeys.includes(k)) || null;
+
+    // Build sets of OK states to detect newly-correct blocks
+    const prevOk = new Set(
+      (prevCheckItems || [])
+        .filter((i) => i.state === "ok")
+        .map((i) => i.key)
+    );
+    const nowOk = new Set(
+      checkItems.filter((i) => i.state === "ok").map((i) => i.key)
+    );
+
+    const newlyOkOrdered = missionOrder.filter(
+      (k) => nowOk.has(k) && !prevOk.has(k)
+    );
+
     // No dataset at all
     if (!dsChain) {
-      setBaymax(
-        "We don’t have a dataset picked yet. Try dropping one block that tells me *which* dataset we’re exploring, then stack the rest under it."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(false);
+      const line = pickOne([
+        "I don’t see a “use dataset” block yet. Drop one in first so I know which folder of images we’re exploring.",
+        "Step one: pick a dataset. Try dragging a “use dataset” block into the workspace to get us started.",
+        "Right now I’m guessing in the dark. Add a “use dataset” block so we can plug into some real images.",
+      ]);
+      setBaymaxState(line, "hint", false);
       return;
     }
 
     // Some blocks exist but order is off
     if (wrongKeys.length > 0) {
-      setBaymax(
-        "A few blocks are hanging in there, but the order feels a bit scrambled. Keep it as one neat vertical chain: choose the dataset first, then info/stats, then image stuff lower down."
-      );
-      setBaymaxMood("warning");
-      setBaymaxTyping(true);
+      const line = pickOne([
+        "You’ve got some good blocks in there, but the order is a bit jumbled. Keep everything hanging in one straight chain under “use dataset”.",
+        "Nice start! Try putting all the info and image blocks directly under the dataset block, top to bottom.",
+        "Almost there straighten the chain: dataset at the top, then info, then counts, then distribution, then image stuff.",
+      ]);
+      setBaymaxState(line, "warning", true);
       return;
     }
 
-    // Missing: dataset info
-    if (missingKeys.includes("dataset.info")) {
-      setBaymax(
-        "We know *which* dataset we’re using, but we’re not asking it for any basic info yet. Maybe try adding something under the dataset that lets us read its summary."
+    // ⚡ New: user added *some* mission block, but not the one that's next
+    if (firstMissing && newlyOkOrdered.length > 0) {
+      const justAdded = newlyOkOrdered[0];
+      if (justAdded !== firstMissing) {
+        const addedNice = FRIENDLY_NAMES[justAdded] ?? "that block";
+        const wantNice = FRIENDLY_NAMES[firstMissing] ?? "the earlier step";
+
+        // A couple of special cases to feel extra smart:
+        if (
+          justAdded === "dataset.sample_image" &&
+          firstMissing === "dataset.class_counts"
+        ) {
+          setBaymaxState(
+            pickOne([
+              "Nice, you grabbed a sample image already! Before we admire it too much, let’s slot in a “class counts” block above so we know how many examples each label has.",
+              "I like that you went straight to a picture. Now add “class counts” earlier in the chain so we understand the dataset before we stare at it.",
+            ]),
+            "hint",
+            true
+          );
+          return;
+        }
+
+        if (
+          justAdded === "dataset.sample_image" &&
+          firstMissing === "dataset.class_distribution_preview"
+        ) {
+          setBaymaxState(
+            pickOne([
+              "Cool sample! One more thing before we rely on it: add a “class distribution preview” block earlier so we can see if any label is dominating.",
+              "Jumping to an image is fun, but let’s drop in “class distribution preview” above it so we know how balanced things are.",
+            ]),
+            "hint",
+            true
+          );
+          return;
+        }
+
+        if (
+          justAdded === "image.channels_split" &&
+          firstMissing === "dataset.sample_image"
+        ) {
+          setBaymaxState(
+            pickOne([
+              "You added “split RGB channels”, nice! Now we just need a “get sample image” block before it so there’s an actual picture to split.",
+              "Great, you’re ready to split colors. Pop a “get sample image” block right before it so we have something to dissect.",
+            ]),
+            "hint",
+            true
+          );
+          return;
+        }
+
+        // Generic “nice, but we still need X earlier”
+        setBaymaxState(
+          pickOne([
+            `Nice, you added ${addedNice}. To finish this mission, we still need ${wantNice} earlier in the chain.`,
+            `That block will help later! Now let’s try not to skip some steps, add ${wantNice} above it so the story makes sense.`,
+          ]),
+          "hint",
+          true
+        );
+        return;
+      }
+    }
+
+    // If something specific is next, talk about that
+    if (firstMissing) {
+      const nice = FRIENDLY_NAMES[firstMissing] ?? "the next block in the list";
+
+      if (firstMissing === "dataset.info") {
+        setBaymaxState(
+          pickOne([
+            "We know which dataset we’re using, but we’re not asking it any basic questions yet. Drop in a “dataset info” block next.",
+            "Dataset chosen. Now add “dataset info” so we can see its name and the list of classes.",
+          ]),
+          "hint",
+          true
+        );
+        return;
+      }
+
+      if (firstMissing === "dataset.class_counts") {
+        setBaymaxState(
+          pickOne([
+            "Let’s see how many images we have for each label. A “class counts” block under the info block would be perfect now.",
+            "Good, we know the dataset. Next up, try the “class counts” block so we can catch any super tiny classes early.",
+          ]),
+          "hint",
+          true
+        );
+        return;
+      }
+
+      if (firstMissing === "dataset.class_distribution_preview") {
+        setBaymaxState(
+          pickOne([
+            "We know the counts, but not the percentages yet. Add a “class distribution preview” block to spot any big imbalances.",
+            "Counts are cool, but percentages help your brain. Try the “class distribution preview” block next.",
+          ]),
+          "hint",
+          true
+        );
+        return;
+      }
+
+      if (firstMissing === "dataset.sample_image") {
+        setBaymaxState(
+          pickOne([
+            "Right now we’re only talking *about* the dataset, not looking at any pictures. Add a “get sample image” block so we can see one.",
+            "Let’s grab a concrete example. A “get sample image” block will pull one picture out of the dataset for us.",
+          ]),
+          "hint",
+          true
+        );
+        return;
+      }
+
+      if (firstMissing === "image.channels_split") {
+        if (sampleLoaded) {
+          setBaymaxState(
+            pickOne([
+              "Nice, we’ve got a sample image! Drop in “split RGB channels” so we can peek at red, green, and blue separately.",
+              "That sample looks good. Now try “split RGB channels” to see what each color channel is contributing.",
+            ]),
+            "hint",
+            true
+          );
+        } else {
+          setBaymaxState(
+            pickOne([
+              "We’ll want “split RGB channels” after we pull a sample. Make sure you’ve got a “get sample image” block running first.",
+              "Once you’ve grabbed a sample image, add “split RGB channels” to really dissect it.",
+            ]),
+            "hint",
+            true
+          );
+        }
+        return;
+      }
+
+      // Generic fallback
+      setBaymaxState(
+        `We still haven’t added ${nice}. Try snapping it into the chain under the dataset block.`,
+        "hint",
+        true
       );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
       return;
     }
 
-    // Missing: counts / distribution
-    if (
-      missingKeys.includes("dataset.class_counts") ||
-      missingKeys.includes("dataset.class_distribution_preview")
-    ) {
-      setBaymax(
-        "We’ve got the dataset, but we’re not really looking at how the labels are spread out. Think of a block that shows how many examples each class has or how the classes are distributed."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    }
-
-    // Missing: sample image
-    if (missingKeys.includes("dataset.sample_image")) {
-      setBaymax(
-        "Right now we’re only talking *about* the dataset, not actually looking at a picture from it. Try adding something that grabs one example image for us."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    }
-
-    // Sample loaded but nothing displays it
-    if (sampleLoaded && !showInChain) {
-      setBaymax(
-        "We’re pulling an image, but we never actually show it on screen. Maybe think of a block that takes that sample and turns it into a visible preview."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    }
-
-    // Missing: channels / grayscale previews
-    if (
-      missingKeys.includes("image.channels_split") &&
-      missingKeys.includes("image.to_grayscale_preview")
-    ) {
-      setBaymax(
-        "We see the full-color image, but we haven’t tried breaking it down or simplifying it yet. Look for blocks that let you split colors or view a simpler, one-channel version."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    } else if (missingKeys.includes("image.channels_split")) {
-      setBaymax(
-        "We’ve got the picture, but we’re not inspecting the color channels separately. Try something that peels the image into red, green, and blue pieces."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    } else if (missingKeys.includes("image.to_grayscale_preview")) {
-      setBaymax(
-        "We’re still only viewing the full-color image. Maybe try a block that shows what it looks like if we collapse it into just light/dark values."
-      );
-      setBaymaxMood("hint");
-      setBaymaxTyping(true);
-      return;
-    }
-
-    // Everything present & in order
+    // All mission pieces present & in order
     if (done === checkItems.length && checkItems.length > 0) {
-      setBaymax(
-        "This chain is doing everything we need: info, counts, distribution, and visuals all in one line. If it looks good to you, try hitting “Submit & Run”."
-      );
-      setBaymaxMood("success");
-      setBaymaxTyping(false);
+      const line = pickOne([
+        "This chain is doing everything we need: info, counts, distribution, and image exploration. If it looks good, hit “Submit & Run”.",
+        "Mission blocks all in place. You’re reading the dataset like a tiny researcher now.",
+        "Nice! You’ve built a full dataset-inspection pipeline. When you’re ready, run it and see everything in the panel.",
+      ]);
+      setBaymaxState(line, "success", false);
       return;
     }
 
     // Default “almost there” vibe
-    setBaymax(
-      "You’re pretty close. Just keep everything stacked under the dataset block and think in this order: understand the dataset first, then grab a sample, then explore how it looks."
+    setBaymaxState(
+      pickOne([
+        "You’re pretty close. Keep everything stacked under the dataset block and think: info → counts → distribution → sample → RGB split.",
+        "This is shaping up nicely. Check which mission blocks are still dim in the toolbox and drag them into your main chain.",
+        "Keep going, use the glowing blocks in the toolbox as a checklist. Snap them in order under “use dataset”.",
+      ]),
+      "neutral",
+      true
     );
-    setBaymaxMood("neutral");
-    setBaymaxTyping(true);
   }
 
   /* ---------- Instant feedback (attached-chain only) ---------- */
@@ -461,13 +690,12 @@ export default function Module1Page() {
     const sampleInChain = !!(
       dsChain && isAfter(dsChain, "dataset.select", "dataset.sample_image")
     );
-    const showInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.show"));
     const splitInChain = !!(
       dsChain && isAfter(dsChain, "dataset.select", "image.channels_split")
     );
     const grayInChain = !!(
       dsChain && isAfter(dsChain, "dataset.select", "image.to_grayscale_preview")
-    );
+    ); // still supported if present, but not required
 
     // sample config
     let sampleConf: { mode: "random" | "index"; index?: number } | null = null;
@@ -481,7 +709,7 @@ export default function Module1Page() {
       }
     }
 
-    // signature
+    // signature ONLY depends on the chain attached to dataset.select
     const sig = JSON.stringify({
       ds: datasetKeyRef.current ?? null,
       infoInChain,
@@ -489,19 +717,12 @@ export default function Module1Page() {
       distInChain,
       sampleInChain,
       sample: sampleConf || null,
-      showInChain,
       splitInChain,
       grayInChain,
     });
+
+    // If nothing about the dataset chain changed, do NOT update Baymax.
     if (sig === lastSigRef.current) {
-      const checklistNow = computeChecklist(ws);
-      setCheckItems(checklistNow);
-      updateBaymaxFromChecklist({
-        dsChain,
-        checkItems: checklistNow,
-        sampleLoaded: !!(datasetKeyRef.current && sampleConf && sampleInChain),
-        showInChain,
-      });
       return;
     }
     lastSigRef.current = sig;
@@ -581,18 +802,12 @@ export default function Module1Page() {
         sampleRef.current = await fetchJSON<SampleResponse>(url);
         sampleLoaded = true;
 
-        if (showInChain) {
-          newLogs.push({
-            kind: "image",
-            src: sampleRef.current.image_data_url,
-            caption: `Original — label: ${sampleRef.current.label}`,
-          });
-        } else {
-          newLogs.push({
-            kind: "preview",
-            text: `[preview] sample loaded (index ${sampleRef.current.index_used}); add a visual block after it to actually see the image.`,
-          });
-        }
+        // Immediately show the sample image
+        newLogs.push({
+          kind: "image",
+          src: sampleRef.current.image_data_url,
+          caption: `Sample — label: ${sampleRef.current.label}`,
+        });
 
         if (splitInChain) {
           const split = await fetchJSON<SplitResp>(
@@ -628,11 +843,14 @@ export default function Module1Page() {
 
       const checklistNow = computeChecklist(ws);
       setCheckItems(checklistNow);
+      const prevChecklist = lastChecklistRef.current || undefined;
+      lastChecklistRef.current = checklistNow;
+
       updateBaymaxFromChecklist({
         dsChain,
         checkItems: checklistNow,
         sampleLoaded,
-        showInChain,
+        prevCheckItems: prevChecklist,
       });
     } catch {
       // ignore transient errors
@@ -654,9 +872,7 @@ export default function Module1Page() {
         label: "class distribution preview",
       },
       { key: "dataset.sample_image", label: "get sample image" },
-      { key: "image.show", label: "show image" },
       { key: "image.channels_split", label: "split RGB channels (preview)" },
-      { key: "image.to_grayscale_preview", label: "grayscale preview" },
     ];
 
     for (const it of spec) {
@@ -679,6 +895,18 @@ export default function Module1Page() {
     }
     return items;
   }
+
+  /* ---------- Mission counter (how many required blocks are used) ---------- */
+  const missionProgress = useMemo(() => {
+    const total = REQUIRED_MISSION_KEYS.length;
+    let done = 0;
+    for (const it of checkItems) {
+      if (it.state === "ok" && REQUIRED_MISSION_KEYS.includes(it.key)) {
+        done++;
+      }
+    }
+    return { total, done };
+  }, [checkItems]);
 
   /* ---------- Submit & Run ---------- */
   async function run() {
@@ -705,17 +933,17 @@ export default function Module1Page() {
       setSubmitOpen(true);
 
       if (ok) {
-        setBaymax(
-          "Nice work. You’ve basically taught me how to look at a dataset like a tiny researcher. When you’re ready, we can head to Module 2 and start preprocessing."
+        setBaymaxState(
+          "Nice work. You’ve basically taught me how to look at a dataset like a tiny researcher. When you’re ready, we can head to Module 2 and start preprocessing.",
+          "success",
+          false
         );
-        setBaymaxMood("success");
-        setBaymaxTyping(false);
       } else {
-        setBaymax(
-          "Not bad at all, just a few pieces out of place. Keep everything under the dataset block and think: info → stats → sample → visuals."
+        setBaymaxState(
+          "Not bad at all, just a few pieces out of place. Keep everything under the dataset block and think: info → stats → sample → visuals.",
+          "warning",
+          false
         );
-        setBaymaxMood("warning");
-        setBaymaxTyping(false);
       }
 
       if (ok && !module2Unlocked) setModule2Unlocked(true);
@@ -809,8 +1037,28 @@ export default function Module1Page() {
           {/* RIGHT: Baymax + Output (scrollable) */}
           <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col">
             <div className="flex flex-col min-h-0 px-4 py-4 gap-4">
-              {/* Baymax panel wrapper (for tutorial focus) */}
-              <div ref={baymaxPanelRef} className="shrink-0">
+              {/* Baymax panel wrapper (for tutorial focus) + mission counter */}
+              <div
+                ref={baymaxPanelRef}
+                className={`shrink-0 transition-transform ${
+                  baymaxBump ? "vb-baymax-bump" : ""
+                }`}
+              >
+                <div className="flex items-center justify-end mb-2">
+                  <div
+                    className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold border shadow-sm transition-colors ${
+                      missionProgress.done >= missionProgress.total
+                        ? "bg-emerald-100 border-emerald-400 text-emerald-700"
+                        : "bg-amber-50 border-amber-300 text-amber-700"
+                    }`}
+                  >
+                    <span>Mission blocks:</span>
+                    <span>
+                      {missionProgress.done} / {missionProgress.total}
+                    </span>
+                  </div>
+                </div>
+
                 <BaymaxPanel
                   line={baymax}
                   mood={baymaxMood}
