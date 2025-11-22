@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WorkspaceSvg, Block as BlocklyBlock } from "blockly";
-import { Blockly } from "@/lib/blockly";
+import { Blockly, setDatasetOptions } from "@/lib/blockly";
 import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 import { toolboxJson } from "@/components/Toolbox";
 
@@ -29,6 +29,15 @@ type DatasetInfo = {
   classes: string[];
   approx_count: Record<string, number>;
   version?: string;
+};
+
+type DatasetListItem = {
+  key: string;
+  name: string;
+};
+
+type DatasetListResponse = {
+  items: DatasetListItem[];
 };
 
 type SampleResponse = {
@@ -157,6 +166,28 @@ export default function Module1Page() {
   const [tutorialStep, setTutorialStep] = useState<number>(2);
   const [focusRect, setFocusRect] = useState<DOMRect | null>(null);
   const [cardPos, setCardPos] = useState<CardPos>(null);
+
+  /* ---------- Load dataset options for "use dataset" block ---------- */
+  useEffect(() => {
+    async function loadDatasets() {
+      try {
+        const resp = await fetchJSON<DatasetListResponse>(`${API_BASE}/datasets`);
+        const items = resp.items ?? [];
+        if (items.length > 0) {
+          setDatasetOptions(
+            items.map((d) => ({
+              name: d.name,
+              key: d.key,
+            }))
+          );
+        }
+      } catch {
+        // keep fallback "Recyclables (Mini)" option on error
+      }
+    }
+
+    loadDatasets();
+  }, []);
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
   useEffect(() => {
