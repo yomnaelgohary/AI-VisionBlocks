@@ -60,7 +60,8 @@ function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
   }
   return chains;
 }
-const hasType = (chain: BlocklyBlock[], type: string) => chain.some((b) => b.type === type);
+const hasType = (chain: BlocklyBlock[], type: string) =>
+  chain.some((b) => b.type === type);
 const indexOfType = (chain: BlocklyBlock[], type: string) =>
   chain.findIndex((b) => b.type === type);
 const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) => {
@@ -71,11 +72,18 @@ const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) 
 
 type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
 
+type CardPos = { top: number; left: number } | null;
+
 export default function Module1Page() {
   const router = useRouter();
 
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
+
+  // For tutorial spotlight positioning
+  const workspaceContainerRef = useRef<HTMLDivElement | null>(null);
+  const baymaxPanelRef = useRef<HTMLDivElement | null>(null);
+  const outputPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [running, setRunning] = useState<boolean>(false);
 
@@ -109,6 +117,13 @@ export default function Module1Page() {
   const lastSigRef = useRef<string>("");
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
+
+  /* ---------- Tutorial state ---------- */
+  const [tutorialPromptOpen, setTutorialPromptOpen] = useState(true);
+  const [tutorialActive, setTutorialActive] = useState(false);
+  const [tutorialStep, setTutorialStep] = useState<number>(2); // 1..4 = toolbox, workspace, Baymax, output
+  const [focusRect, setFocusRect] = useState<DOMRect | null>(null);
+  const [cardPos, setCardPos] = useState<CardPos>(null);
 
   /* ---------- Inject Blockly ---------- */
   useEffect(() => {
@@ -153,6 +168,146 @@ export default function Module1Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocklyDivRef.current]);
 
+  /* ---------- Tutorial helpers ---------- */
+
+  function getDefaultRect(): DOMRect {
+    const vw = window.innerWidth || 1200;
+    const vh = window.innerHeight || 800;
+    const width = Math.min(500, vw - 80);
+    const height = 220;
+    const left = (vw - width) / 2;
+    const top = (vh - height) / 2;
+    return new DOMRect(left, top, width, height);
+  }
+
+  function updateFocusRectForStep(step: number) {
+    let target: HTMLElement | null = null;
+
+    if (step === 2) {
+      target = workspaceContainerRef.current;
+    } else if (step === 3) {
+      target = baymaxPanelRef.current;
+    } else if (step === 4) {
+      target = outputPanelRef.current;
+    }
+
+    if (target) {
+      const rect = target.getBoundingClientRect();
+      setFocusRect(rect);
+    } else {
+      setFocusRect(getDefaultRect());
+    }
+  }
+
+
+  useEffect(() => {
+    if (!tutorialActive) {
+      setFocusRect(null);
+      setCardPos(null);
+      return;
+    }
+
+    updateFocusRectForStep(tutorialStep);
+
+    const onResize = () => {
+      updateFocusRectForStep(tutorialStep);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorialActive, tutorialStep]);
+
+  // compute card position when focusRect changes
+  useEffect(() => {
+    if (!tutorialActive || !focusRect) {
+      setCardPos(null);
+      return;
+    }
+
+    const margin = 16;
+    const cardWidth = 340;
+    const cardHeight = 200;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const rect = focusRect;
+
+    let top = rect.top;
+    let left = rect.right + margin;
+
+    // 1. Try right side
+    if (rect.right + margin + cardWidth < vw) {
+      top = Math.min(rect.top, vh - cardHeight - margin);
+      left = rect.right + margin;
+    } else if (rect.left - margin - cardWidth > 0) {
+      // 2. Try left side
+      top = Math.min(rect.top, vh - cardHeight - margin);
+      left = rect.left - cardWidth - margin;
+    } else if (rect.bottom + margin + cardHeight < vh) {
+      // 3. Try below
+      top = rect.bottom + margin;
+      left = Math.min(rect.left, vw - cardWidth - margin);
+    } else {
+      // 4. Above as fallback
+      top = rect.top - cardHeight - margin;
+      left = Math.min(rect.left, vw - cardWidth - margin);
+    }
+
+    if (top < margin) top = margin;
+    if (left < margin) left = margin;
+
+    setCardPos({ top, left });
+  }, [tutorialActive, focusRect, tutorialStep]);
+
+    function renderTutorialTitle(step: number): string {
+      switch (step) {
+        case 2:
+          return "This is your building area";
+        case 3:
+          return "Meet Baymax 👋";
+        case 4:
+          return "See what your blocks do";
+        default:
+          return "Welcome to VisionBlocks";
+      }
+    }
+
+
+    function renderTutorialBody(step: number): string {
+      switch (step) {
+        case 2:
+          return "This area includes both the toolbox on the left and the main workspace. You'll drag blocks from the toolbox and snap them together in this space to build your computer-vision pipeline. Try to keep everything hanging from a single “use dataset” block so the robot knows what to work on.";
+        case 3:
+          return "Baymax watches what you build and gives hints if something’s missing or out of order. When you’re stuck, check this panel first.";
+        case 4:
+          return "The output panel shows dataset cards, charts, and image previews your blocks produce. It’s where you see the results of your chain.";
+        default:
+          return "We’ll take a super quick tour of the interface, then you’ll be ready to explore the mission.";
+      }
+    }
+
+
+  function handleTutorialPrimary() {
+    // Next or finish
+    if (tutorialStep >= 4) {
+      setTutorialActive(false);
+      setFocusRect(null);
+      setCardPos(null);
+      return;
+    }
+    setTutorialStep((s) => Math.min(4, s + 1));
+  }
+
+  function handleTutorialSecondary() {
+    // Back or skip
+    if (tutorialStep <= 1) {
+      setTutorialActive(false);
+      setFocusRect(null);
+      setCardPos(null);
+      return;
+    }
+    setTutorialStep((s) => Math.max(1, s - 1));
+  }
+
   /* ---------- Baymax helper driven by checklist ---------- */
   function updateBaymaxFromChecklist(args: {
     dsChain?: BlocklyBlock[];
@@ -163,8 +318,12 @@ export default function Module1Page() {
     const { dsChain, checkItems, sampleLoaded, showInChain } = args;
     const done = checkItems.filter((i) => i.state === "ok").length;
 
-    const missingKeys = checkItems.filter((i) => i.state === "missing").map((i) => i.key);
-    const wrongKeys = checkItems.filter((i) => i.state === "wrong_place").map((i) => i.key);
+    const missingKeys = checkItems
+      .filter((i) => i.state === "missing")
+      .map((i) => i.key);
+    const wrongKeys = checkItems
+      .filter((i) => i.state === "wrong_place")
+      .map((i) => i.key);
 
     // No dataset at all
     if (!dsChain) {
@@ -292,11 +451,16 @@ export default function Module1Page() {
 
     // same-chain checks
     const infoInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.info"));
-    const countsInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.class_counts"));
-    const distInChain = !!(
-      dsChain && isAfter(dsChain, "dataset.select", "dataset.class_distribution_preview")
+    const countsInChain = !!(
+      dsChain && isAfter(dsChain, "dataset.select", "dataset.class_counts")
     );
-    const sampleInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "dataset.sample_image"));
+    const distInChain = !!(
+      dsChain &&
+      isAfter(dsChain, "dataset.select", "dataset.class_distribution_preview")
+    );
+    const sampleInChain = !!(
+      dsChain && isAfter(dsChain, "dataset.select", "dataset.sample_image")
+    );
     const showInChain = !!(dsChain && isAfter(dsChain, "dataset.select", "image.show"));
     const splitInChain = !!(
       dsChain && isAfter(dsChain, "dataset.select", "image.channels_split")
@@ -383,15 +547,21 @@ export default function Module1Page() {
             );
           }
           const total =
-            Object.values(dsInfoRef.current.approx_count || {}).reduce((a, c) => a + c, 0) ||
-            1;
+            Object.values(dsInfoRef.current.approx_count || {}).reduce(
+              (a, c) => a + c,
+              0
+            ) || 1;
           const chart = Object.entries(dsInfoRef.current.approx_count || {}).map(
             ([label, count]) => ({
               label,
               percent: (count / total) * 100,
             })
           );
-          newLogs.push({ kind: "chart", title: "Class Distribution (%)", data: chart });
+          newLogs.push({
+            kind: "chart",
+            title: "Class Distribution (%)",
+            data: chart,
+          });
         }
       }
 
@@ -404,7 +574,9 @@ export default function Module1Page() {
             ? `${API_BASE}/datasets/${encodeURIComponent(
                 datasetKeyRef.current
               )}/sample?mode=index&index=${sampleConf.index}`
-            : `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/sample?mode=random`;
+            : `${API_BASE}/datasets/${encodeURIComponent(
+                datasetKeyRef.current
+              )}/sample?mode=random`;
 
         sampleRef.current = await fetchJSON<SampleResponse>(url);
         sampleLoaded = true;
@@ -477,7 +649,10 @@ export default function Module1Page() {
       { key: "dataset.select", label: "use dataset" },
       { key: "dataset.info", label: "dataset info" },
       { key: "dataset.class_counts", label: "class counts" },
-      { key: "dataset.class_distribution_preview", label: "class distribution preview" },
+      {
+        key: "dataset.class_distribution_preview",
+        label: "class distribution preview",
+      },
       { key: "dataset.sample_image", label: "get sample image" },
       { key: "image.show", label: "show image" },
       { key: "image.channels_split", label: "split RGB channels (preview)" },
@@ -494,7 +669,8 @@ export default function Module1Page() {
         if (!present) state = "missing";
         else {
           const okOrder =
-            isAfter(dsChain, "dataset.select", it.key) || it.key === "dataset.select";
+            isAfter(dsChain, "dataset.select", it.key) ||
+            it.key === "dataset.select";
           state = okOrder ? "ok" : "wrong_place";
         }
       }
@@ -551,13 +727,17 @@ export default function Module1Page() {
   /* ---------- UI ---------- */
 
   return (
-    <div className="h-screen w-screen bg-[#E3E7F5]">
+    <div className="h-screen w-screen bg-[#E3E7F5] relative">
       {/* Top nav (matches home style) */}
       <header className="fixed top-0 left-0 right-0 z-20 backdrop-blur-xl bg-white/70 border-b border-white/60 shadow-sm">
         <div className="max-w-[1400px] mx-auto px-5 h-16 flex items-center justify-between">
           <div className="flex items-baseline gap-2">
-            <span className="text-lg font-semibold text-slate-900">VisionBlocks</span>
-            <span className="text-xs text-slate-500">Module 1 · Learn to See</span>
+            <span className="text-lg font-semibold text-slate-900">
+              VisionBlocks
+            </span>
+            <span className="text-xs text-slate-500">
+              Module 1 · Learn to See
+            </span>
           </div>
           <div className="flex items-center gap-3">
             {/* Home button */}
@@ -619,15 +799,18 @@ export default function Module1Page() {
           style={{ gridTemplateColumns: `minmax(0, 1.9fr) minmax(0, 1.2fr)` }}
         >
           {/* LEFT: Blockly workspace */}
-          <div className="h-full min-h-0 rounded-3xl bg-white shadow-[0_22px_60px_rgba(15,23,42,0.25)] border border-white/70 overflow-hidden">
+          <div
+            ref={workspaceContainerRef}
+            className="h-full min-h-0 rounded-3xl bg-white shadow-[0_22px_60px_rgba(15,23,42,0.25)] border border-white/70 overflow-hidden"
+          >
             <div ref={blocklyDivRef} className="w-full h-full min-h-0" />
           </div>
 
           {/* RIGHT: Baymax + Output (scrollable) */}
           <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col">
             <div className="flex flex-col min-h-0 px-4 py-4 gap-4">
-              {/* Baymax “free in the panel” */}
-              <div className="shrink-0">
+              {/* Baymax panel wrapper (for tutorial focus) */}
+              <div ref={baymaxPanelRef} className="shrink-0">
                 <BaymaxPanel
                   line={baymax}
                   mood={baymaxMood}
@@ -637,8 +820,12 @@ export default function Module1Page() {
               </div>
 
               {/* Output takes rest */}
-              <div className="flex-1 min-h-0">
-                <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />
+              <div ref={outputPanelRef} className="flex-1 min-h-0">
+                <OutputPanel
+                  logs={logs}
+                  onClear={() => setLogs([])}
+                  dark={false}
+                />
               </div>
 
               {/* Hidden checklist – still used, not shown */}
@@ -649,6 +836,134 @@ export default function Module1Page() {
           </div>
         </div>
       </div>
+
+      {/* Tutorial spotlight overlay */}
+      {tutorialActive && focusRect && (
+        <div className="fixed inset-0 z-[900] pointer-events-none">
+          {/* Four blurred/dim regions around the focus rect */}
+          {/* Top */}
+          <div
+            className="absolute left-0 right-0 bg-slate-900/55 backdrop-blur-[3px] pointer-events-auto"
+            style={{ top: 0, height: Math.max(0, focusRect.top) }}
+          />
+          {/* Bottom */}
+          <div
+            className="absolute left-0 right-0 bg-slate-900/55 backdrop-blur-[3px] pointer-events-auto"
+            style={{ top: focusRect.bottom, bottom: 0 }}
+          />
+          {/* Left */}
+          <div
+            className="absolute bg-slate-900/55 backdrop-blur-[3px] pointer-events-auto"
+            style={{
+              top: focusRect.top,
+              height: focusRect.height,
+              left: 0,
+              width: Math.max(0, focusRect.left),
+            }}
+          />
+          {/* Right */}
+          <div
+            className="absolute bg-slate-900/55 backdrop-blur-[3px] pointer-events-auto"
+            style={{
+              top: focusRect.top,
+              height: focusRect.height,
+              left: focusRect.right,
+              right: 0,
+            }}
+          />
+
+          {/* Highlight border around focus area */}
+          <div
+            className="absolute rounded-2xl pointer-events-none"
+            style={{
+              top: Math.max(0, focusRect.top - 6),
+              left: Math.max(0, focusRect.left - 6),
+              width: focusRect.width + 12,
+              height: focusRect.height + 12,
+              boxShadow:
+                "0 0 0 2px rgba(251,191,36,0.9), 0 0 30px rgba(251,191,36,0.85)",
+            }}
+          />
+
+          {/* Tutorial card positioned next to focus */}
+          {cardPos && (
+            <div
+              className="absolute z-[1000] pointer-events-auto"
+              style={{ top: cardPos.top, left: cardPos.left }}
+            >
+              <div className="max-w-[340px] w-[340px] rounded-2xl bg-white shadow-2xl border border-slate-200 p-5">
+                <h2 className="text-lg font-semibold text-slate-900 mb-2">
+                  {renderTutorialTitle(tutorialStep)}
+                </h2>
+                <p className="text-sm text-slate-600 mb-4">
+                  {renderTutorialBody(tutorialStep)}
+                </p>
+
+                <div className="flex items-center justify-between gap-3 mt-2">
+                  <button
+                    onClick={handleTutorialSecondary}
+                    className="px-3 py-1.5 rounded-full border border-slate-300 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 hover:border-slate-400 transition"
+                  >
+                    {tutorialStep <= 1 ? "Skip tour" : "Back"}
+                  </button>
+
+                  <button
+                    onClick={handleTutorialPrimary}
+                    className="px-4 py-1.5 rounded-full bg-sky-500 text-xs font-semibold text-white shadow-sm hover:bg-sky-400 hover:shadow-[0_0_12px_rgba(56,189,248,0.7)] transition"
+                  >
+                    {tutorialStep >= 4 ? "Finish" : "Next"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tutorial opt-in prompt (centered) */}
+      {tutorialPromptOpen && !tutorialActive && (
+        <div className="fixed inset-0 z-[950] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="max-w-md w-full mx-4 rounded-2xl bg-white shadow-2xl border border-slate-200 p-6">
+            <h2 className="text-xl font-semibold text-slate-900 mb-2">
+              Welcome to VisionBlocks 👋
+            </h2>
+            <p className="text-sm text-slate-600 mb-4">
+              This is your first mission: learning how to “see” a dataset. Do you
+              want a 30-second tour of the interface before you start?
+            </p>
+
+            <div className="flex items-center justify-end gap-3 mt-2">
+              <button
+                onClick={() => {
+                  setTutorialPromptOpen(false);
+                  setTutorialActive(false);
+                }}
+                className="px-3 py-1.5 rounded-full border border-slate-300 bg-white text-xs font-medium text-slate-600 hover:bg-slate-50 hover:border-slate-400 transition"
+              >
+                Skip for now
+              </button>
+              <button
+                onClick={() => {
+                  setTutorialPromptOpen(false);
+                  setTutorialActive(true);
+                  setTutorialStep(2);
+                  // Force an initial focus rect in case the effect hasn't run yet
+                  setTimeout(() => {
+                    try {
+                      updateFocusRectForStep(2);
+                    } catch {
+                      // ignore
+                    }
+                  }, 0);
+                }}
+                className="px-4 py-1.5 rounded-full bg-sky-500 text-xs font-semibold text-white shadow-sm hover:bg-sky-400 hover:shadow-[0_0_12px_rgba(56,189,248,0.7)] transition"
+              >
+                Start quick tour
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Info Modal */}
       <InfoModal
