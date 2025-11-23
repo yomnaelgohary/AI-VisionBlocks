@@ -18,7 +18,7 @@ export const toolboxJsonModule2 = {
       colour: "#22c55e",
       contents: [
         { kind: "block", type: "dataset.sample_image" },
-        { kind: "block", type: "image.show" }, // from Module 1
+        { kind: "block", type: "image.channels_split" }, 
       ],
     },
 
@@ -29,7 +29,6 @@ export const toolboxJsonModule2 = {
       colour: "#a78bfa", // violet
       contents: [
         { kind: "block", type: "m2.resize" },
-        { kind: "block", type: "m2.crop_center" },
         { kind: "block", type: "m2.pad" },
         { kind: "block", type: "m2.brightness_contrast" },
         { kind: "block", type: "m2.blur_sharpen" },
@@ -40,6 +39,5 @@ export const toolboxJsonModule2 = {
         { kind: "block", type: "m2.export_dataset" },
       ],
     },
-
   ],
 };
