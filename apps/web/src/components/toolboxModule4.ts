@@ -49,6 +49,8 @@ export const toolboxJsonModule4 = {
         { kind: "block", type: "m4.layer_pool" },
         { kind: "block", type: "m4.layer_dense" },
         { kind: "block", type: "m4.model_summary" },
+        { kind: "block", type: "m4.model_save" },
+        { kind: "block", type: "m4.model_load" },
       ],
     },
 

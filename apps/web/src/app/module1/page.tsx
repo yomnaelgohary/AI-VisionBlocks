@@ -126,7 +126,7 @@ export default function Module1Page() {
 
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [baymax, setBaymax] = useState<string>(
-    "Right now I’m basically staring into the void 😅. Start by hanging a “use dataset” block so we have something to look at."
+    "Right now I’m basically staring into the void. Start by hanging a “use dataset” block so we have something to look at."
   );
   const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
   const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
@@ -156,6 +156,7 @@ export default function Module1Page() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tokenRef = useRef(0);
   const lastSigRef = useRef<string>("");
+  const lastSampleSigRef = useRef<string>("");
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
   const lastChecklistRef = useRef<StageChecklistItem[] | null>(null);
@@ -821,52 +822,63 @@ export default function Module1Page() {
       let sampleLoaded = false;
 
       if (datasetKeyRef.current && sampleConf && sampleInChain) {
-        const url =
-          sampleConf.mode === "index"
-            ? `${API_BASE}/datasets/${encodeURIComponent(
-                datasetKeyRef.current
-              )}/sample?mode=index&index=${sampleConf.index}`
-            : `${API_BASE}/datasets/${encodeURIComponent(
-                datasetKeyRef.current
-              )}/sample?mode=random`;
-
-        sampleRef.current = await fetchJSON<SampleResponse>(url);
-        sampleLoaded = true;
-
-        // Immediately show the sample image
-        newLogs.push({
-          kind: "image",
-          src: sampleRef.current.image_data_url,
-          caption: `Sample — label: ${sampleRef.current.label}`,
+        const sampleSig = JSON.stringify({
+          ds: datasetKeyRef.current,
+          sampleConf,
         });
 
-        if (splitInChain) {
-          const split = await fetchJSON<SplitResp>(
-            `${API_BASE}/datasets/${encodeURIComponent(
-              datasetKeyRef.current
-            )}/split_channels?path=${encodeURIComponent(sampleRef.current.path)}`
-          );
-          newLogs.push({
-            kind: "images",
-            items: [
-              { src: split.r_data_url, caption: "Red channel" },
-              { src: split.g_data_url, caption: "Green channel" },
-              { src: split.b_data_url, caption: "Blue channel" },
-            ],
-          });
+        if (sampleSig !== lastSampleSigRef.current || !sampleRef.current) {
+          const url =
+            sampleConf.mode === "index"
+              ? `${API_BASE}/datasets/${encodeURIComponent(
+                  datasetKeyRef.current
+                )}/sample?mode=index&index=${sampleConf.index}`
+              : `${API_BASE}/datasets/${encodeURIComponent(
+                  datasetKeyRef.current
+                )}/sample?mode=random`;
+
+          sampleRef.current = await fetchJSON<SampleResponse>(url);
+          lastSampleSigRef.current = sampleSig;
         }
 
-        if (grayInChain) {
-          const gray = await fetchJSON<GrayResp>(
-            `${API_BASE}/datasets/${encodeURIComponent(
-              datasetKeyRef.current
-            )}/grayscale?path=${encodeURIComponent(sampleRef.current.path)}`
-          );
+        if (sampleRef.current) {
+          sampleLoaded = true;
+
+          // Always show the pinned sample image
           newLogs.push({
             kind: "image",
-            src: gray.image_data_url,
-            caption: "Grayscale preview",
+            src: sampleRef.current.image_data_url,
+            caption: `Sample — label: ${sampleRef.current.label}`,
           });
+
+          if (splitInChain) {
+            const split = await fetchJSON<SplitResp>(
+              `${API_BASE}/datasets/${encodeURIComponent(
+                datasetKeyRef.current
+              )}/split_channels?path=${encodeURIComponent(sampleRef.current.path)}`
+            );
+            newLogs.push({
+              kind: "images",
+              items: [
+                { src: split.r_data_url, caption: "Red channel" },
+                { src: split.g_data_url, caption: "Green channel" },
+                { src: split.b_data_url, caption: "Blue channel" },
+              ],
+            });
+          }
+
+          if (grayInChain) {
+            const gray = await fetchJSON<GrayResp>(
+              `${API_BASE}/datasets/${encodeURIComponent(
+                datasetKeyRef.current
+              )}/grayscale?path=${encodeURIComponent(sampleRef.current.path)}`
+            );
+            newLogs.push({
+              kind: "image",
+              src: gray.image_data_url,
+              caption: "Grayscale preview",
+            });
+          }
         }
       }
 

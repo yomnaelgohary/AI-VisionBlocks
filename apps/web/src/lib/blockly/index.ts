@@ -743,6 +743,48 @@ const C_AMBER4 = 40;  // Evaluation
   },
 };
 
+// Save current model
+(Blockly as any).Blocks["m4.model_save"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("save model as")
+      .appendField(
+        new (Blockly as any).FieldTextInput("my-model-v1"),
+        "NAME"
+      );
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Stores the current model with a name so you can load and use it later without rebuilding from scratch.",
+      "ROW",
+      "Save model"
+    );
+  },
+};
+
+// Use / load a saved model
+(Blockly as any).Blocks["m4.model_load"] = {
+  init: function () {
+    this.appendDummyInput("ROW")
+      .appendField("use saved model")
+      .appendField("name")
+      .appendField(
+        new (Blockly as any).FieldTextInput("my-model-v1"),
+        "NAME"
+      );
+    setStatement(this);
+    this.setColour(C_PURPLE);
+    appendInfo(
+      this,
+      "Tells Baymax to switch to a previously saved model before training, evaluating, or predicting.",
+      "ROW",
+      "Use saved model"
+    );
+  },
+};
+
+
 // ---------------- Training ----------------
 
 (Blockly as any).Blocks["m4.train_hparams"] = {
@@ -856,3 +898,6 @@ pythonGenerator.forBlock["m4.train_hparams"] = () => "# m4.train_hparams\n";
 pythonGenerator.forBlock["m4.train_start"] = () => "# m4.train_start\n";
 pythonGenerator.forBlock["m4.eval_test"] = () => "# m4.eval_test\n";
 pythonGenerator.forBlock["m4.predict_sample"] = () => "# m4.predict_sample\n";
+pythonGenerator.forBlock["m4.model_save"] = () => "# m4.model_save\n";
+pythonGenerator.forBlock["m4.model_load"] = () => "# m4.model_load\n";
+
