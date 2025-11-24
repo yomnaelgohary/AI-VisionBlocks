@@ -146,6 +146,21 @@ def split_state(dataset_key: str) -> Optional[Dict[str, Any]]:
     }
 
 
+# expose the *indices* so training/eval can reuse the active split
+def get_active_split_indices(dataset_key: str) -> Optional[Dict[str, List[int]]]:
+    """
+    Return the current in-session train/test indices for this dataset, or None if
+    no split has been applied yet.
+    """
+    st = _ACTIVE_SPLITS.get(dataset_key)
+    if not st:
+        return None
+    return {
+        "train": list(st["train_idxs"]),
+        "test": list(st["test_idxs"]),
+    }
+
+
 # ---------------------------
 # Bias check (TRAIN only)
 # ---------------------------
