@@ -28,13 +28,11 @@ export const toolboxJsonModule4 = {
     // ---------------- Splitting & Bias (from Module 3) ----------------
     {
       kind: "category",
-      name: "Splitting & Bias",
+      name: "Splitting",
       colour: "#ec4899",
       contents: [
         { kind: "block", type: "m3.set_split_ratio" },
         { kind: "block", type: "m3.apply_split" },
-        { kind: "block", type: "m3.check_bias_train" },
-        { kind: "block", type: "m3.balance_train" },
       ],
     },
 
@@ -49,8 +47,6 @@ export const toolboxJsonModule4 = {
         { kind: "block", type: "m4.layer_pool" },
         { kind: "block", type: "m4.layer_dense" },
         { kind: "block", type: "m4.model_summary" },
-        { kind: "block", type: "m4.model_save" },
-        { kind: "block", type: "m4.model_load" },
       ],
     },
 

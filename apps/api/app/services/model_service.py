@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 import base64
 import io
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 
 import tensorflow as tf
 from tensorflow import keras
@@ -15,6 +17,7 @@ from app.core.config import settings
 from app.services.datasets import get_datasets_index, DatasetIndex
 from app.services.split_service import get_active_split_indices
 
+
 # Where to keep saved models + diagrams.
 BASE_DIR = Path(settings.DATASETS_DIR).parent
 MODELS_DIR = getattr(settings, "MODELS_DIR", BASE_DIR / "created_models")
@@ -22,6 +25,8 @@ MODEL_VIZ_DIR = getattr(settings, "MODEL_VIZ_DIR", BASE_DIR / "model_diagrams")
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_VIZ_DIR.mkdir(parents=True, exist_ok=True)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,35 +57,17 @@ def _slugify(name: str) -> str:
 
 def _infer_input_shape(ds: DatasetIndex) -> Tuple[int, int, int]:
     """
-    Try to determine H, W, C for the model input.
-    Priority:
-      1) ds.image_shape if present and fully known
-      2) Read the first image from disk and look at its size
+    TEMPORARY: force a 150x150x3 input size.
+
+    Module 2's preprocessing pipeline resizes + pads images to 150x150,
+    so we can safely standardize the model input to this shape for now.
+
+    Later, we can either:
+      - read a stored image_shape from the processed dataset, or
+      - expose an input-size setting in the frontend blocks.
     """
-    # Option 1: dataset index already knows
-    img_shape = getattr(ds, "image_shape", None)
-    if img_shape and all(v is not None for v in img_shape):
-        h, w, c = img_shape
-        return int(h), int(w), int(c)
+    return 150, 150, 3
 
-    # Fallback: open first row with a path
-    from PIL import Image
-
-    img_path = None
-    for row in ds.rows:
-        rel = row.get("path") or row.get("image_path")
-        if rel:
-            img_path = Path(settings.DATASETS_DIR) / ds.key / rel
-            break
-
-    if img_path is None or not img_path.exists():
-        # Mildly conservative default; frontend will normally ensure we have valid data
-        return 224, 224, 3
-
-    with Image.open(img_path) as im:
-        im = im.convert("RGB")
-        h, w = im.height, im.width
-    return h, w, 3
 
 
 def _capture_model_summary(model: keras.Model) -> List[str]:
@@ -89,32 +76,116 @@ def _capture_model_summary(model: keras.Model) -> List[str]:
     return buf.getvalue().splitlines()
 
 
-def _generate_model_diagram(model: keras.Model, filename: str) -> Optional[str]:
-    """
-    Use keras.utils.plot_model to create a PNG diagram and return
-    a data URL string (data:image/png;base64,...). Returns None if anything fails.
-    """
-    try:
-        from tensorflow.keras.utils import plot_model  # type: ignore
-    except Exception:
-        return None
+def _slugify_filename(name: str) -> str:
+    # keep it filesystem-safe
+    name = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
+    return name.strip("._") or "model"
 
-    safe = _slugify(filename)
-    out_path = MODEL_VIZ_DIR / f"{safe}.png"
+# Directory where we store generated diagrams
+_MODEL_DIAGRAM_DIR = Path("created_models") / "diagrams"
+_MODEL_DIAGRAM_DIR.mkdir(parents=True, exist_ok=True)
+
+def _generate_model_diagram(model, filename: str) -> str | None:
+  """
+  Try to generate a PNG diagram and return it as a data URL string.
+
+  Order:
+  1) plotneuralnet (LaTeX / pdflatex-based)
+  2) keras.utils.plot_model as a fallback
+
+  On failure, returns None. Debug info is printed to stdout.
+  """
+  print("[_generate_model_diagram] start; filename=", filename)
+
+  # Choose an output directory for diagrams (you can change this if you already
+  # have MODEL_VIZ_DIR defined somewhere else)
+  try:
+    base_dir = Path(__file__).resolve().parent
+  except NameError:
+    base_dir = Path(".")
+
+  out_dir = base_dir / "model_viz"
+  out_dir.mkdir(parents=True, exist_ok=True)
+
+  safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in filename)
+  out_png = out_dir / f"{safe_name}.png"
+
+  # ------------------------------------------------------------------
+  # 1) Try plotneuralnet adapter
+  # ------------------------------------------------------------------
+  try:
+    print("[_generate_model_diagram] trying plotneuralnet adapter…")
+    from app.third_party.plotneuralnet_adapter import (
+      render_model_with_plotneuralnet,
+    )
+
+    png_path_str = render_model_with_plotneuralnet(model, out_png)
+    png_path = Path(png_path_str)
+    if not png_path.exists():
+      print(
+        "[_generate_model_diagram] plotneuralnet adapter did not create PNG at",
+        png_path,
+      )
+      raise FileNotFoundError(f"plotneuralnet PNG not found at {png_path}")
+
+    out_png = png_path
+    print("[_generate_model_diagram] plotneuralnet adapter succeeded:", out_png)
+  except Exception as e:
+    print(
+      "[_generate_model_diagram] plotneuralnet_adapter failed, "
+      "will try direct keras.utils.plot_model. error=",
+      repr(e),
+    )
+
+    # ----------------------------------------------------------------
+    # 2) Fallback: keras.utils.plot_model
+    # ----------------------------------------------------------------
     try:
-        plot_model(
-            model,
-            to_file=str(out_path),
-            show_shapes=True,
-            show_layer_names=True,
-            dpi=96,
+      from tensorflow.keras.utils import plot_model  # type: ignore
+    except Exception as e2:
+      print(
+        "[_generate_model_diagram] keras.utils.plot_model not importable; "
+        "giving up on diagram. error=",
+        repr(e2),
+      )
+      return None
+
+    try:
+      print("[_generate_model_diagram] calling keras.utils.plot_model…")
+      plot_model(
+        model,
+        to_file=str(out_png),
+        show_shapes=True,
+        show_layer_names=True,
+        dpi=120,
+      )
+      if not out_png.exists():
+        print(
+          "[_generate_model_diagram] keras.utils.plot_model did not create a file at",
+          out_png,
         )
-        with open(out_path, "rb") as f:
-            raw = f.read()
-        b64 = base64.b64encode(raw).decode("ascii")
-        return f"data:image/png;base64,{b64}"
-    except Exception:
         return None
+      print("[_generate_model_diagram] keras.utils.plot_model succeeded:", out_png)
+    except Exception as e3:
+      print(
+        "[_generate_model_diagram] keras.utils.plot_model failed; "
+        "no diagram will be returned. error=",
+        repr(e3),
+      )
+      return None
+
+  # ------------------------------------------------------------------
+  # 3) Base64-encode and return data URL
+  # ------------------------------------------------------------------
+  try:
+    with open(out_png, "rb") as f:
+      b64 = base64.b64encode(f.read()).decode("ascii")
+    data_url = f"data:image/png;base64,{b64}"
+    print("[_generate_model_diagram] returning data URL of length", len(data_url))
+    return data_url
+  except Exception as e:
+    print("[_generate_model_diagram] failed to read/encode PNG. error=", repr(e))
+    return None
 
 
 def _get_class_mapping(ds: DatasetIndex) -> Dict[str, int]:
@@ -143,6 +214,7 @@ def build_model_for_dataset(dataset_key: str, spec_dict: Dict[str, Any]) -> Dict
         ],
     )
 
+    # IMPORTANT: fixed size (matches preprocessed images)
     input_h, input_w, input_c = _infer_input_shape(ds)
     num_classes = len(ds.classes) or 1
 
@@ -150,7 +222,7 @@ def build_model_for_dataset(dataset_key: str, spec_dict: Dict[str, Any]) -> Dict
     model.add(layers.Input(shape=(input_h, input_w, input_c), name="input"))
 
     flatten_inserted = False
-    saw_dense = False
+    saw_dense = False  # reserved if you want to enforce at least one dense
 
     for layer_spec in spec.layers:
         ltype = layer_spec.type
@@ -212,13 +284,14 @@ def build_model_for_dataset(dataset_key: str, spec_dict: Dict[str, Any]) -> Dict
         metrics=["accuracy"],
     )
 
+    # THIS WAS THE MISSING PART AFTER THE LAST CHANGE
     # Keep in session
     _ACTIVE_MODELS[dataset_key] = model
     _ACTIVE_SPECS[dataset_key] = spec_dict
     global _CURRENT_DATASET_KEY
     _CURRENT_DATASET_KEY = dataset_key
 
-    # Optional: summary & diagram for the frontend
+    # Optional: summary for the frontend (no diagram for now)
     summary_lines = _capture_model_summary(model)
     diagram_data_url = _generate_model_diagram(model, filename=f"{dataset_key}_{spec.name}")
 
@@ -230,6 +303,7 @@ def build_model_for_dataset(dataset_key: str, spec_dict: Dict[str, Any]) -> Dict
         "summary_lines": summary_lines,
         "diagram_data_url": diagram_data_url,
     }
+
 
 
 def get_active_model(dataset_key: str) -> keras.Model:
@@ -277,7 +351,9 @@ def load_model_for_dataset(dataset_key: str, model_name: str) -> Dict[str, Any]:
     _CURRENT_DATASET_KEY = dataset_key
 
     summary_lines = _capture_model_summary(model)
-    diagram_data_url = _generate_model_diagram(model, filename=f"loaded_{dataset_key}_{model_name}")
+
+    # Diagram generation temporarily disabled here as well
+    diagram_data_url: Optional[str] = None
 
     return {
         "ok": True,
@@ -335,6 +411,12 @@ def _build_tf_dataset_for_indices(
 
 
 def train_active_model(dataset_key: str, epochs: int, batch_size: int) -> Dict[str, Any]:
+    """
+    Train the *active* model on the active TRAIN split.
+
+    IMPORTANT: This is now where we compile the model. We always call
+    model.compile(...) here before fitting, so /model/build can stay light.
+    """
     idx = get_datasets_index()
     if dataset_key not in idx:
         raise KeyError(f"Unknown dataset: {dataset_key}")
@@ -347,6 +429,13 @@ def train_active_model(dataset_key: str, epochs: int, batch_size: int) -> Dict[s
 
     train_idxs = split["train"]
     train_ds = _build_tf_dataset_for_indices(ds, train_idxs, model, batch_size=batch_size, shuffle=True)
+
+    # Compile here (even if already compiled previously, it's safe to recompile)
+    model.compile(
+        optimizer="adam",
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
 
     history = model.fit(train_ds, epochs=epochs, verbose=0)
 

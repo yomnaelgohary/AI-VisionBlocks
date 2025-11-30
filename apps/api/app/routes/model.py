@@ -43,23 +43,23 @@ class LoadReq(BaseModel):
 
 @router.post("/build")
 def model_build(body: BuildReq) -> Dict[str, Any]:
-    # Optional: enforce that a split exists when requested
-    if body.use_active_split:
-        st = split_state(body.dataset_key)
-        if not st:
-            raise HTTPException(
-                status_code=400,
-                detail="No active split for this dataset. Use the split blocks to apply a train/test split first.",
-            )
-    try:
-        resp = build_model_for_dataset(body.dataset_key, spec_dict=body.spec.dict())
-        # Ensure there's an 'ok' field for the frontend
-        resp.setdefault("ok", True)
-        return resp
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+  """
+  Build and register a model for the given dataset.
+
+  NOTE: We no longer require an active split to *build* the model.
+  Splits are only needed for training/evaluation.
+  """
+  try:
+    resp = build_model_for_dataset(body.dataset_key, spec_dict=body.spec.dict())
+    # Ensure there's an 'ok' field for the frontend
+    resp.setdefault("ok", True)
+    return resp
+  except KeyError as e:
+    # Unknown dataset_key
+    raise HTTPException(status_code=404, detail=str(e))
+  except Exception as e:
+    # Any other build error
+    raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/save")
