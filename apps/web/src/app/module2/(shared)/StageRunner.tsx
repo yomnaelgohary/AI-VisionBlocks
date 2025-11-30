@@ -1151,6 +1151,86 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   /* ---------- Baymax driven by checklist ---------- */
 
+    // Friendly label for a block type (used in Baymax hints)
+  function labelForType(type: string): string {
+    if (type === "dataset.select") return "use dataset";
+    if (type === "dataset.sample_image") return "get sample image";
+    return type.replace("m2.", "").replaceAll("_", " ");
+  }
+
+  /**
+   * For pipeline stages: walk the user's chain top-to-bottom and compare it
+   * with the stage's expectedOrder / requiredBlocks.
+   *
+   * Returns a sentence like:
+   *   “After X, I was expecting Y, but I see Z instead.”
+   *
+   * Used for the “the next step should be THIS block, not THAT block”
+   * behaviour (including Stage 4 with normalize).
+   */
+  function pipelineNextStepHint(
+    s: StageConfig,
+    _items: StageChecklistItem[]
+  ): string | null {
+    if (s.type !== "pipeline") return null;
+
+    const ws = workspaceRef.current;
+    if (!ws) return null;
+
+    const top = findFirstPipelineTop(ws);
+    if (!top) return null;
+
+    const chainTypes = walkConnectedChainFrom(top);
+
+    // What the stage *wants*, in order
+    const rawExpected =
+      (s.expectedOrder && s.expectedOrder.length
+        ? s.expectedOrder
+        : s.requiredBlocks || []) || [];
+
+    // Only look at the m2.* preprocessing blocks
+    const expected = rawExpected.filter((t) => t.startsWith("m2."));
+    if (!expected.length) return null;
+
+    const pipelineTypes = chainTypes.filter((t) => t.startsWith("m2."));
+    if (!pipelineTypes.length) return null;
+
+    const maxLen = Math.max(expected.length, pipelineTypes.length);
+
+    for (let i = 0; i < maxLen; i++) {
+      const expType = expected[i];
+      const actType = pipelineTypes[i];
+
+      if (!expType) break; // nothing more expected
+
+      const prevType = i === 0 ? null : expected[i - 1];
+
+      // No block in this slot yet → "you’re missing Y after X"
+      if (!actType) {
+        const prevLabel = prevType
+          ? `"${labelForType(prevType)}"`
+          : "the sample image";
+        const expLabel = `"${labelForType(expType)}"`;
+        return `I’m reading your blocks from top to bottom. Right after ${prevLabel}, I was expecting ${expLabel}, but there’s no block there yet. Try adding ${expLabel} in that spot.`;
+      }
+
+      // Wrong block in this slot → "this should be Y, not Z"
+      if (actType !== expType) {
+        const prevLabel = prevType
+          ? `"${labelForType(prevType)}"`
+          : "the sample image";
+        const expLabel = `"${labelForType(expType)}"`;
+        const actLabel = `"${labelForType(actType)}"`;
+        return `Checking top to bottom: after ${prevLabel} I expected ${expLabel}, but I see ${actLabel} instead. Try moving ${expLabel} into this spot and sliding ${actLabel} further down.`;
+      }
+    }
+
+    // Order matches our simple check, nothing specific to say
+    return null;
+  }
+
+
+  /* ---------- Baymax driven by checklist ---------- */
   function updateBaymaxFromChecklist(
     s: StageConfig,
     items: StageChecklistItem[],
@@ -1166,6 +1246,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     const loopItem = items.find((i) => i.key === "m2.loop_dataset");
     const exportItem = items.find((i) => i.key === "m2.export_dataset");
 
+    // Nothing to inspect yet
     if (items.length === 0) {
       const lines = [
         "Drag your preprocessing blocks into a single chain under the sample image. Each stage builds on the previous one.",
@@ -1176,70 +1257,70 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       return;
     }
 
+    /* ---------- Wrong-place blocks ---------- */
     if (wrong.length > 0) {
-      // Special case: 150×150 resize + pad present but with wrong numbers
-      if (
-        (stageKey === "3" || stageKey === "4" || stageKey === "5") &&
-        missing.length === 0 &&
-        hints.resizePadAlmost150
-      ) {
-        if (stageKey === "5") {
+      // For pipeline stages 1–4, we want the top-to-bottom
+      // "after this block should be THAT block" style hints.
+      if (s.type === "pipeline" && ["1", "2", "3", "4"].includes(stageKey)) {
+        // Special param hints first: 150×150 and normalize-mode for 3 & 4
+        if (
+          (stageKey === "3" || stageKey === "4") &&
+          missing.length === 0 &&
+          hints.resizePadAlmost150
+        ) {
+          if (stageKey === "4") {
+            const lines = [
+              "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
+              "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
+              "Structure looks good. The next step is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
+            ];
+            setBaymaxState(
+              pickLine(lines, stageKey + "-wrong-params-150-stage4"),
+              "warning",
+              true
+            );
+            return;
+          }
+
+          // Stage 3
           const lines = [
-            "Inside the loop you’ve wired up resize and pad, which is perfect. Now set both of them to exactly 150 × 150 so every image your loop exports matches the earlier stages.",
-            "Your loop body has the right structure, but the frame size is off. Change the resize and pad blocks inside the loop to 150×150 so the exported dataset lines up with the target.",
-            "Loop pipeline detected: resize and pad are in place, but not yet at 150 × 150. Update those values inside the loop so every processed image lands in the same square.",
+            "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
+            "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
+            "The structure is correct. The last piece is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
           ];
           setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-params-150-loop"),
+            pickLine(lines, stageKey + "-wrong-params-150"),
             "warning",
             true
           );
           return;
         }
 
-        if (stageKey === "4") {
+        if (stageKey === "4" && missing.length === 0 && hints.normalizeModeNot01) {
           const lines = [
-            "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
-            "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
-            "Structure looks good. The next step is numeric: make resize and pad both 150 × 150 so the image matches the target before normalization.",
+            "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
+            "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
+            "Normalization is in the right place, but its mode doesn’t match the stage goal. Pick the 0–1 mode: other modes are valid in real projects, but this exercise wants 0–1 specifically.",
           ];
           setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-params-150-stage4"),
+            pickLine(lines, stageKey + "-wrong-normalize-mode"),
             "warning",
             true
           );
           return;
         }
 
-        // Stage 3 (pipeline)
-        const lines = [
-          "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
-          "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
-          "The structure is correct. The last piece is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-wrong-params-150"),
-          "warning",
-          true
-        );
-        return;
+        // Now do the "after this block, that block should be here" logic.
+        const seqLine = pipelineNextStepHint(s, items);
+        if (seqLine) {
+          setBaymaxState(seqLine, "warning", true);
+          return;
+        }
+        // If we somehow can't compute a sequence hint, fall through
+        // to the generic wrong-place messages below.
       }
 
-      // Special case: Stage 4 – normalize present, but wrong mode (we want 0–1 here)
-      if (stageKey === "4" && missing.length === 0 && hints.normalizeModeNot01) {
-        const lines = [
-          "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
-          "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
-          "Normalization is in the right place, but its mode doesn’t match the stage goal. Pick the 0–1 mode: other modes are valid in real projects, but this exercise wants 0–1 specifically.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-wrong-normalize-mode"),
-          "warning",
-          true
-        );
-        return;
-      }
-
+      // Loop/export stage (Stage 5) or generic fallback
       const lines =
         s.type === "loop_export"
           ? [
@@ -1262,6 +1343,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       return;
     }
 
+    /* ---------- Missing blocks ---------- */
     if (missing.length > 0) {
       if (s.type === "loop_export") {
         // Stage 5 / loop-export style hints
@@ -1281,7 +1363,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         if (exportItem?.state === "missing") {
           const lines = [
             "Your loop can now process images, but nothing is saving the results. Add an export dataset block after the loop so the processed data is written out.",
-            "Loop is good, preprocessing is inside, now you need a final export step after the loop to produce a new dataset.",
+            "Loop is in the right place, now you need an export step after the loop to produce a new dataset.",
             "We’re missing the last piece: a save step after the loop. Add the export dataset block right under the loop.",
           ];
           setBaymaxState(
@@ -1339,6 +1421,14 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           true
         );
       } else if (stageKey === "4") {
+        // NEW: Stage 4 also uses the “top-to-bottom next step” logic
+        const seqLine = pipelineNextStepHint(s, items);
+        if (seqLine) {
+          setBaymaxState(seqLine, "hint", true);
+          return;
+        }
+
+        // Fallback if we somehow can't compute a sequence hint
         const lines = [
           "The goal now is to get pixel values into a nice, consistent numeric range. Look for the normalize step and place it toward the end of the chain.",
           "We’re not changing how the image looks, just how the numbers are scaled. Add the normalization block near the bottom of your preprocessing recipe.",
@@ -1351,7 +1441,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         );
       } else if (stageKey === "5") {
         const lines = [
-          "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini preprocessing pipeline, and there should be a save step after the loop.",
+          "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–4 pipeline, and there should be a save step after the loop.",
           "We’re almost in production mode. Make sure your loop actually applies the full recipe, and that the export block is ready to write out the new dataset.",
           "Stage 5 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
         ];
@@ -1386,7 +1476,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       return;
     }
 
-    // All checklist items structurally OK
+    /* ---------- All checklist items structurally OK ---------- */
     if (done === items.length && items.length > 0) {
       // Stage 2: gentle nudge about extreme values
       if (stageKey === "2" && (hints.extremeBC || hints.extremeBlurSharp)) {
@@ -1439,7 +1529,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       return;
     }
 
-    // Fallback “nearly” state (rare, but keep it clean and target-based)
+    /* ---------- Fallback “nearly there” ---------- */
     const lines = [
       "You’re close. Keep everything in one chain under the sample image and compare your result to the target image. The differences will tell you which block to tweak next.",
       "Almost there. Use the target image and the stage blocks counter as a checklist: one or two blocks just need to be added or nudged.",
@@ -1451,6 +1541,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       true
     );
   }
+
+
 
   /* ---------- Submit & Run ---------- */
   async function run() {

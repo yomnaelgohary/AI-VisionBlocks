@@ -34,13 +34,13 @@ export default function Module4Index() {
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden animated-bg">
-      {/* TOP NAV – same style as home, with Module 4 highlight */}
+      {/* TOP NAV – updated to display Module 3 */}
       <header className="w-full backdrop-blur-xl bg-white/50 border-b border-white/50 fixed top-0 left-0 z-20 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg font-semibold text-gray-800">VisionBlocks</span>
             <span className="text-xs text-gray-500">
-              Module 4 · Model building & training missions
+              Module 3 · Model building & training missions
             </span>
           </div>
 
@@ -57,14 +57,13 @@ export default function Module4Index() {
             <Link href="/module2" className="hover:text-sky-500 transition">
               M2
             </Link>
-            <Link href="/module3" className="hover:text-sky-500 transition">
-              M3
-            </Link>
+
+            {/* M3 now highlights /module4 */}
             <Link
               href="/module4"
               className="px-3 py-1 rounded-full bg-sky-500 text-white shadow-sm hover:bg-sky-400 transition"
             >
-              M4
+              M3
             </Link>
           </nav>
         </div>
@@ -89,7 +88,7 @@ export default function Module4Index() {
         </h1>
 
         <p className="text-gray-600 mt-4 text-base md:text-lg max-w-3xl">
-          In Module 4, you’ll turn your processed datasets into working neural networks.
+          In Module 3, you’ll turn your processed datasets into working neural networks.
           You’ll split data into TRAIN and TEST, design a CNN with blocks, train it,
           and then evaluate it honestly with test metrics and single-image predictions.
         </p>
@@ -110,12 +109,7 @@ export default function Module4Index() {
               >
                 {/* Soft glow behind card */}
                 <div className="absolute inset-0 -z-10 opacity-0 group-hover:opacity-80 transition-opacity duration-300">
-                  <div
-                    className={`
-                      h-full w-full rounded-3xl blur-2xl
-                      bg-sky-300/50
-                    `}
-                  />
+                  <div className="h-full w-full rounded-3xl blur-2xl bg-sky-300/50" />
                 </div>
 
                 <Link
@@ -129,7 +123,7 @@ export default function Module4Index() {
                     group-hover:border-sky-200
                   `}
                 >
-                  {/* Top row: icon + label */}
+                  {/* Top row */}
                   <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-2xl bg-white/80 shadow-sm flex items-center justify-center">
@@ -145,11 +139,9 @@ export default function Module4Index() {
                   </div>
 
                   {/* Description */}
-                  <p className="text-sm text-gray-700 mt-1 min-h-[60px]">
-                    {stage.short}
-                  </p>
+                  <p className="text-sm text-gray-700 mt-1 min-h-[60px]">{stage.short}</p>
 
-                  {/* CTA row */}
+                  {/* CTA */}
                   <div className="mt-4 flex items-center justify-between gap-2">
                     <div className="flex flex-col">
                       <span className="text-xs text-gray-500">
@@ -174,7 +166,7 @@ export default function Module4Index() {
         </p>
       </main>
 
-      {/* Global background animation (shared with home style) */}
+      {/* Global background animation */}
       <style jsx global>{`
         .animated-bg {
           background: radial-gradient(circle at 20% 20%, #4ba3e480, transparent 65%),

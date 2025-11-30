@@ -9,7 +9,8 @@ export default function Module2Index() {
     {
       id: "1",
       title: "Stage 1: Grayscale",
-      short: "Turn color images into simple grayscale so you can focus on shapes and brightness.",
+      short:
+        "Turn color images into simple grayscale so you can focus on shapes and brightness.",
     },
     {
       id: "2",
@@ -38,7 +39,8 @@ export default function Module2Index() {
     {
       id: "bonus",
       title: "Bonus: Edge Detection",
-      short: "Use edge filters to highlight outlines and structure in your images.",
+      short:
+        "Use edge filters to highlight outlines and structure in your images.",
     },
   ];
 
@@ -48,7 +50,9 @@ export default function Module2Index() {
       <header className="w-full backdrop-blur-xl bg-white/50 border-b border-white/50 fixed top-0 left-0 z-20 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold text-gray-800">VisionBlocks</span>
+            <span className="text-lg font-semibold text-gray-800">
+              VisionBlocks
+            </span>
             <span className="text-xs text-gray-500">
               Module 2 · Image preprocessing missions
             </span>
@@ -70,11 +74,9 @@ export default function Module2Index() {
             >
               M2
             </Link>
-            <Link href="/module3" className="hover:text-sky-500 transition">
-              M3
-            </Link>
+            {/* M3 now points to the (renamed) model module at /module4 */}
             <Link href="/module4" className="hover:text-sky-500 transition">
-              M4
+              M3
             </Link>
           </nav>
         </div>
@@ -118,7 +120,6 @@ export default function Module2Index() {
               ? "from-purple-200/70 via-sky-100/60 to-white/80"
               : "from-sky-200/70 via-purple-100/60 to-white/80";
 
-            // For non-bonus, core stage number = index in this list + 1 (since bonus is at the end)
             const coreLabel = isBonus ? "" : `Core stage ${index + 1}`;
 
             return (

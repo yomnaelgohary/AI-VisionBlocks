@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ChevronRight, BookOpen, Layers, Split, Brain } from "lucide-react";
+import { ChevronRight, BookOpen, Layers, Brain } from "lucide-react";
 
 export default function HomePage() {
   const modules = [
@@ -24,17 +24,9 @@ export default function HomePage() {
     },
     {
       id: "3",
-      title: "Module 3: Splitting & Bias",
-      desc: "Create train/test splits and inspect dataset balance and bias.",
-      href: "/module3",
-      icon: <Split className="w-5 h-5 text-sky-500" />,
-      tag: "Data science",
-    },
-    {
-      id: "4",
-      title: "Module 4: Model",
+      title: "Module 3: Model",
       desc: "Build a small CNN with blocks, train it, and evaluate predictions.",
-      href: "/module4",
+      href: "/module4", // still goes to module4 routes
       icon: <Brain className="w-5 h-5 text-purple-500" />,
       tag: "Modeling",
     },
@@ -67,11 +59,9 @@ export default function HomePage() {
             <Link href="/module2" className="hover:text-sky-500 transition">
               M2
             </Link>
-            <Link href="/module3" className="hover:text-sky-500 transition">
-              M3
-            </Link>
+            {/* Module 3 now points to the old module4 route */}
             <Link href="/module4" className="hover:text-sky-500 transition">
-              M4
+              M3
             </Link>
           </nav>
         </div>
@@ -101,7 +91,7 @@ export default function HomePage() {
         </p>
 
         {/* MODULE CARDS – styled like Module 2’s stage tiles */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mt-16">
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mt-16">
           {modules.map((mod) => (
             <motion.div
               key={mod.id}
