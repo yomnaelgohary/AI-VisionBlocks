@@ -159,11 +159,12 @@ function computeChecklist(
   const allBlocks = getAllBlocks(ws);
   const existsAnywhere = (t: string) => allBlocks.some((b) => b.type === t);
 
-  const expected = stage.expectedOrder && stage.expectedOrder.length
-    ? stage.expectedOrder
-    : stage.requiredBlocks;
+  const expected =
+    stage.expectedOrder && stage.expectedOrder.length
+      ? stage.expectedOrder
+      : stage.requiredBlocks;
 
-  // Check ordering within the main chain
+  // ---- 1) coarse global order check (like before) ----
   const orderOK = new Map<string, boolean>();
   if (expected.length > 0) {
     let lastIdx = -1;
@@ -176,15 +177,51 @@ function computeChecklist(
     }
   }
 
+  // ---- 2) fine-grained adjacency check (NEW) ----
+  // If a type ever appears as the *second* block in an illegal pair,
+  // we mark that type as "locally wrong".
+  const adjacencyBad = new Map<string, boolean>();
+
+  const ORDER: Record<string, string[]> = {
+    "dataset.select": ["m3.set_split_ratio"],
+    "m3.set_split_ratio": ["m3.apply_split"],
+    "m3.apply_split": ["m4.model_init"],
+    "m4.model_init": ["m4.layer_conv2d"],
+    "m4.layer_conv2d": ["m4.layer_pool"],
+    "m4.layer_pool": ["m4.layer_conv2d", "m4.layer_dense"],
+    "m4.layer_dense": ["m4.layer_dense", "m4.model_summary"],
+    "m4.model_summary": ["m4.train_hparams"],
+    "m4.train_hparams": ["m4.train_start"],
+    "m4.train_start": ["m4.eval_test"],
+    "m4.eval_test": ["dataset.sample_image"],
+    "dataset.sample_image": ["m4.predict_sample"],
+    // after m4.predict_sample we don't enforce anything
+  };
+
+  for (let i = 0; i < mainTypes.length - 1; i++) {
+    const current = mainTypes[i];
+    const next = mainTypes[i + 1];
+    const allowedNext = ORDER[current];
+
+    if (allowedNext && allowedNext.length > 0 && !allowedNext.includes(next)) {
+      // "next" is the offending block – its *type* is locally wrong.
+      adjacencyBad.set(next, true);
+    }
+  }
+
+  // ---- 3) combine both checks into the tri-state items ----
   for (const t of stage.requiredBlocks) {
-    const inWorkspace = existsAnywhere(t);
     const inMainChain = mainIndexOf(t) !== -1;
     const inOrder = !!orderOK.get(t);
+    const localBad = !!adjacencyBad.get(t);
 
-    let state: Tri = "missing";
-    if (!inWorkspace) {
+    let state: Tri;
+    if (!inMainChain) {
+      // Block is either missing entirely or floating off the main chain.
       state = "missing";
-    } else if (!inMainChain || !inOrder) {
+    } else if (!inOrder || localBad) {
+      // It’s in the main chain, but either out of global order
+      // OR appears at least once as the second element of an illegal pair.
       state = "wrong_place";
     } else {
       state = "ok";
@@ -203,6 +240,56 @@ function computeChecklist(
 
   return items;
 }
+
+
+/**
+ * Model 3 strict ordering rules
+ * Returns structural hints for Baymax:
+ *  - okUntil: last index where order is correct
+ *  - wrongBlock: first block that violates ordering
+ *  - expectedNext: the ONLY allowed next block type(s)
+ */
+function computeModel3OrderHints(chain: BlocklyBlock[]) {
+  const TYPES = chain.map(b => b.type);
+
+  // Define allowed sequential transitions
+  const ORDER: Record<string, string[]> = {
+    "dataset.select": ["m3.set_split_ratio"],
+    "m3.set_split_ratio": ["m3.apply_split"],
+    "m3.apply_split": ["m4.model_init"],
+    "m4.model_init": ["m4.layer_conv2d"],
+    "m4.layer_conv2d": ["m4.layer_pool"],
+    "m4.layer_pool": ["m4.layer_conv2d", "m4.layer_dense"],
+    "m4.layer_dense": ["m4.layer_dense", "m4.model_summary"],
+    "m4.model_summary": ["m4.train_hparams"],
+    "m4.train_hparams": ["m4.train_start"],
+    "m4.train_start": ["m4.eval_test"],
+    "m4.eval_test": ["dataset.sample_image"],
+    "dataset.sample_image": ["m4.predict_sample"]
+  };
+
+  // Walk from top to bottom
+  for (let i = 0; i < TYPES.length - 1; i++) {
+    const current = TYPES[i];
+    const next = TYPES[i + 1];
+    const expected = ORDER[current] || [];
+
+    if (!expected.includes(next)) {
+      return {
+        okUntil: i,
+        wrongBlock: next,
+        expectedNext: expected,
+      };
+    }
+  }
+
+  return {
+    okUntil: TYPES.length - 1,
+    wrongBlock: null,
+    expectedNext: null,
+  };
+}
+
 
 /* ----------------- Model spec builder ----------------- */
 
@@ -533,114 +620,234 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageId]);
 
+  function labelForTypeM4(type: string): string {
+  switch (type) {
+    case "dataset.select":
+      return "use dataset";
+    case "m3.set_split_ratio":
+      return "set split ratio";
+    case "m3.apply_split":
+      return "apply split";
+    case "m4.model_init":
+      return "start new model";
+    case "m4.layer_conv2d":
+      return "add conv layer";
+    case "m4.layer_pool":
+      return "add pooling layer";
+    case "m4.layer_dense":
+      return "add dense layer";
+    case "m4.model_summary":
+      return "show model summary";
+    case "m4.train_hparams":
+      return "training setup";
+    case "m4.train_start":
+      return "start training";
+    case "m4.eval_test":
+      return "evaluate on test set";
+    case "dataset.sample_image":
+      return "get sample image";
+    case "m4.predict_sample":
+      return "predict current sample";
+    default:
+      return type
+        .replace(/^m3\./, "")
+        .replace(/^m4\./, "")
+        .replace(/^dataset\./, "")
+        .replaceAll("_", " ");
+  }
+}
+
+/**
+ * Walk the main chain top-to-bottom and enforce the strict ordering rules:
+ * use dataset → set split ratio → apply split → start new model → conv → pool →
+ * (conv or dense) → dense(s) → summary → training setup → start training →
+ * evaluate on test set → get sample image → predict current sample
+ *
+ * Returns a sentence like:
+ *  "After X I expected Y, but I see Z instead."
+ */
+function pipelineNextStepHintM4(): string | null {
+  const ws = workspaceRef.current;
+  if (!ws) return null;
+
+  const chain = getMainChain(ws);
+  if (!chain.length) return null;
+
+  const types = chain.map((b) => b.type);
+
+  const ORDER: Record<string, string[]> = {
+    "dataset.select": ["m3.set_split_ratio"],
+    "m3.set_split_ratio": ["m3.apply_split"],
+    "m3.apply_split": ["m4.model_init"],
+    "m4.model_init": ["m4.layer_conv2d"],
+    "m4.layer_conv2d": ["m4.layer_pool"],
+    "m4.layer_pool": ["m4.layer_conv2d", "m4.layer_dense"],
+    "m4.layer_dense": ["m4.layer_dense", "m4.model_summary"],
+    "m4.model_summary": ["m4.train_hparams"],
+    "m4.train_hparams": ["m4.train_start"],
+    "m4.train_start": ["m4.eval_test"],
+    "m4.eval_test": ["dataset.sample_image"],
+    "dataset.sample_image": ["m4.predict_sample"],
+    // after m4.predict_sample we don't enforce anything
+  };
+
+  for (let i = 0; i < types.length - 1; i++) {
+    const current = types[i];
+    const next = types[i + 1];
+
+    const expectedNext = ORDER[current];
+    if (!expectedNext || expectedNext.length === 0) continue; // we don't care about this spot
+
+    if (!expectedNext.includes(next)) {
+      const prevLabel = `"${labelForTypeM4(current)}"`;
+      const actLabel = `"${labelForTypeM4(next)}"`;
+
+      const expLabels = expectedNext.map((t) => `"${labelForTypeM4(t)}"`);
+      const expLabel =
+        expLabels.length === 1
+          ? expLabels[0]
+          : expLabels.slice(0, -1).join(" or ") + " or " + expLabels.slice(-1);
+
+      return `I’m reading your blocks from top to bottom. After ${prevLabel} I was expecting ${expLabel}, but I see ${actLabel} instead. Try moving ${expLabel} into this spot and sliding ${actLabel} further down.`;
+    }
+  }
+
+  // no order violations found
+  return null;
+}
+
+
   /* ---------- Baymax from checklist ---------- */
 
-  function updateBaymaxFromChecklist(
-    s: StageConfig,
-    items: StageChecklistItem[],
-    initial = false
-  ) {
-    const total = items.length;
-    const done = items.filter((i) => i.state === "ok").length;
-    const missing = items.filter((i) => i.state === "missing");
-    const miswired = items.filter((i) => i.state === "wrong_place");
-    const stageKey = String(s.id);
+function updateBaymaxFromChecklist(
+  s: StageConfig,
+  items: StageChecklistItem[],
+  initial = false
+) {
+  const total = items.length;
+  const done = items.filter((i) => i.state === "ok").length;
+  const missing = items.filter((i) => i.state === "missing");
+  const wrong = items.filter((i) => i.state === "wrong_place");
+  const stageKey = String(s.id);
 
-    if (initial) {
-      const introLine =
-        s.intro?.[0] ||
-        "Connect the blocks for this stage in a single chain under the dataset block. When you’re ready, press Submit & Run.";
-      setBaymaxState(introLine, "neutral", false);
+  if (initial) {
+    const introLine =
+      s.intro?.[0] ||
+      "Build a single, straight pipeline under the dataset block: split, build the model, train it, then evaluate and predict.";
+    setBaymaxState(introLine, "neutral", false);
+    return;
+  }
+
+  if (total === 0) {
+    setBaymaxState(
+      "Drag in the blocks for this mission and connect them in one chain under the dataset block.",
+      "hint",
+      false
+    );
+    return;
+  }
+
+  // --- If any blocks are in the wrong order, use the top-to-bottom hint ---
+  if (wrong.length > 0) {
+    const seq = pipelineNextStepHintM4();
+    if (seq) {
+      setBaymaxState(seq, "warning", true);
       return;
     }
 
-    if (total === 0) {
-      setBaymaxState(
-        "Drag in the blocks that belong to this stage, then connect them under the dataset block.",
-        "hint",
-        false
-      );
-      return;
-    }
+    // Fallback (should rarely happen)
+    const labels = wrong.map((w) => w.label).join(", ");
+    const lines = [
+      `Some blocks are in the right chain but in the wrong order: ${labels}. Follow the “split → model → train → evaluate → predict” story from top to bottom.`,
+      `Your pipeline has all the right ingredients, but they’re shuffled. Reorder the blocks so each step feeds into the next one logically.`,
+    ];
+    setBaymaxState(
+      pickLine(lines, stageKey + "-wrong-fallback"),
+      "warning",
+      true
+    );
+    return;
+  }
 
-    if (missing.length > 0 || miswired.length > 0) {
-      const missingLabels = missing.map((m) => m.label);
-      const miswiredLabels = miswired.map((m) => m.label);
+  // --- Missing required blocks (they’re not in the main chain at all) ---
+  if (missing.length > 0) {
+    const names = missing.map((m) => m.label).join(", ");
 
-      if (miswired.length > 0) {
-        const lines = [
-          `You’ve added the right blocks (${miswiredLabels.join(
-            ", "
-          )}), but some of them aren’t wired into the main chain yet. Make sure they form one straight pipeline under the “use dataset” block.`,
-          "Those blocks are sitting in the workspace like spare parts. Snap them directly under the dataset block so the data actually flows through them.",
-          "I see the stage blocks, but some are floating off to the side. Everything for this mission should be in a single chain that starts at the dataset.",
-        ];
-        setBaymaxState(pickLine(lines, stageKey + "-miswired"), "hint", true);
-      } else {
-        const linesByStage: Record<string, string[]> = {
-          "1": [
-            "You still need all the blocks that set and apply the split. Look for the glowing split blocks in the toolbox and chain them under the dataset.",
-            "Stage 1 needs a full split pipeline: use dataset → set split ratio → apply split. At least one of those is still missing.",
-          ],
-          "2": [
-            "For model building we need the model_init, conv, pool, dense, and summary blocks wired together. One or more are still missing.",
-            "Stage 2 wants a proper CNN sketch: model_init, at least one conv, at least one pool, at least one dense, then a model_summary.",
-          ],
-          "3": [
-            "Training needs the model blocks plus train hyperparameters and train_start. Some of them are not in your main chain yet.",
-            "To train, the model and the train blocks must sit in the same pipeline under the dataset.",
-          ],
-          "4": [
-            "Evaluation & prediction needs eval_test and predict_sample attached to the same chain as the model. One or more of these are missing.",
-            "The evaluate and predict blocks need to be active in the chain, not just lying in the toolbox or workspace.",
-          ],
-        };
-
-        const genericMissing = [
-          `You’re still missing some key blocks for this mission: ${missingLabels.join(
-            ", "
-          )}. Add those, then I can run the stage.`,
-          `Not all of this stage’s blocks are on the main chain yet. Look for the glowing ones in the toolbox.`,
-          "Almost there. Drop in the remaining stage blocks and connect them under the dataset, then hit Submit & Run.",
-        ];
-
-        const stageLines = linesByStage[stageKey] || genericMissing;
-        setBaymaxState(
-          pickLine(stageLines, stageKey + "-missing"),
-          "hint",
-          true
-        );
-      }
-      return;
-    }
-
-    const linesByStageComplete: Record<string, string[]> = {
-      "1": [
-        "Nice, you’ve set up a complete split chain. When you press Submit & Run, I’ll apply the train/test split and show you per-class counts.",
-        "Your split pipeline looks solid: dataset → split ratio → apply split. Let’s run it and see how the data is divided.",
+    const linesByStage: Record<string, string[]> = {
+      split: [
+        `We still need the split steps: ${names}. Place them right after “use dataset”.`,
+        "This stage wants a clean split pipeline: use dataset → set split ratio → apply split. At least one of those is still missing from the chain.",
       ],
-      "2": [
-        "Great, you’ve wired up a full CNN definition. Submit & Run will build the model and show you its summary.",
-        "This looks like a valid model pipeline: initialization, conv, pool, dense, and summary are all in place. Time to build it.",
+      model_build: [
+        `Your model sketch is incomplete. Add the missing model blocks: ${names}.`,
+        "For model building we expect: start new model → conv → pool → dense → model summary.",
       ],
-      "3": [
-        "Your training pipeline is ready. Submit & Run will train the current model on the TRAIN split using your hyperparameters.",
-        "Everything for training is connected: model + train settings + start. Let’s see how the accuracy and loss evolve.",
+      train: [
+        `The training pipeline is missing. You should add the training blocks after the model summary.`,
+        "Training needs the training setup and start training blocks connected after the model.",
       ],
-      "4": [
-        "Evaluation chain ready. Submit & Run will evaluate on TEST and, if configured, run a single-sample prediction.",
-        "Nice, the model, eval, and predict pieces are all stitched together. Let’s measure performance and try a sample.",
+      eval_predict: [
+        `Evaluation/prediction is missing: ${names}. Those should come after training in the chain.`,
+        "Evaluation and prediction blocks should appear at the end: evaluate → get sample image → predict current sample.",
       ],
     };
 
-    const genericOk = [
-      "Nice, you’ve placed all the blocks this stage cares about in a single chain. When you’re ready, press Submit & Run and I’ll call the backend for you.",
-      "All required blocks are here and connected. Double-check any parameters, then hit Submit & Run to see what your pipeline does.",
+    const stageLines = linesByStage[s.type] || [
+      `You’re still missing: ${names}. Add them into the main chain in their proper places.`,
+      "Some stage blocks are still missing from your pipeline. Use the ordering story in the stage text as a guide.",
     ];
 
-    const lines = linesByStageComplete[stageKey] || genericOk;
-    setBaymaxState(pickLine(lines, stageKey + "-ok"), "success", false);
+    setBaymaxState(
+      pickLine(stageLines, stageKey + "-missing"),
+      "hint",
+      true
+    );
+    return;
   }
+
+  // --- All checklist items structurally OK ---
+  if (done === total && total > 0) {
+    const completeByStage: Record<string, string[]> = {
+      split: [
+        "Nice, you’ve built a proper split pipeline. Submit & Run will divide the dataset into train and test sets.",
+        "Split chain looks perfect: dataset → set split ratio → apply split. You’re ready to run it.",
+      ],
+      model_build: [
+        "Great, your model-building pipeline is in the right order. Submit & Run will build the model and show the summary.",
+        "Model sketch complete: conv, pool, dense, summary — all wired correctly. Time to build.",
+      ],
+      train: [
+        "Your training pipeline is ready: model, training setup, and start training are all in sequence.",
+        "Training story checks out. Submit & Run will start training with your chosen hyperparameters.",
+      ],
+      eval_predict: [
+        "Evaluation and prediction blocks are in the right order. Submit & Run to evaluate on the test set and try a prediction.",
+        "End-to-end evaluation pipeline looks good: evaluate → get sample image → predict current sample.",
+      ],
+    };
+
+    const finalLines =
+      completeByStage[s.type] || [
+        "All the blocks this stage cares about are present and in the right order. You’re good to Submit & Run.",
+      ];
+
+    setBaymaxState(pickLine(finalLines, stageKey + "-ok"), "success", false);
+    return;
+  }
+
+  // --- Fallback "nearly there" ---
+  const lines = [
+    "You’re close. Follow the story from top to bottom: split the data, build the model, train it, then evaluate and predict.",
+    "Almost there. Compare your pipeline to the intended order: split → model → train → evaluate → predict.",
+    "You’re on the right track. If something feels off, think: what should happen immediately after this block?",
+  ];
+  setBaymaxState(
+    pickLine(lines, stageKey + "-nearly-" + done),
+    "neutral",
+    true
+  );
+}
+
 
   /* ---------- Submit & Run: STAGE-AGNOSTIC EXECUTION ---------- */
 
