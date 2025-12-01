@@ -390,9 +390,9 @@ Blockly.Blocks["m2.blur_sharpen"] = {
     this.appendDummyInput("ROW")
       .appendField("blur / sharpen")
       .appendField("blur radius")
-      .appendField(new (Blockly as any).FieldNumber(0, 0, 20, 0.5), "BLUR")
+      .appendField(new (Blockly as any).FieldNumber(0, 0, 50, 0.5), "BLUR")
       .appendField("sharpen amount")
-      .appendField(new (Blockly as any).FieldNumber(0, 0, 3, 0.1), "SHARP");
+      .appendField(new (Blockly as any).FieldNumber(0, 0, 50, 0.1), "SHARP");
     setStatement(this);
     this.setColour(C_VIOLET);
     appendInfo(

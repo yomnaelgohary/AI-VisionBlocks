@@ -1231,316 +1231,337 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
 
   /* ---------- Baymax driven by checklist ---------- */
-  function updateBaymaxFromChecklist(
-    s: StageConfig,
-    items: StageChecklistItem[],
-    _prevItems?: StageChecklistItem[]
-  ) {
-    const done = items.filter((i) => i.state === "ok").length;
-    const missing = items.filter((i) => i.state === "missing");
-    const wrong = items.filter((i) => i.state === "wrong_place");
+function updateBaymaxFromChecklist(
+  s: StageConfig,
+  items: StageChecklistItem[],
+  _prevItems?: StageChecklistItem[]
+) {
+  const done = items.filter((i) => i.state === "ok").length;
+  const missing = items.filter((i) => i.state === "missing");
+  const wrong = items.filter((i) => i.state === "wrong_place");
 
-    const stageKey = String(s.id);
-    const hints = getParamHints(s);
+  const stageKey = String(s.id);
+  const hints = getParamHints(s);
 
-    const loopItem = items.find((i) => i.key === "m2.loop_dataset");
-    const exportItem = items.find((i) => i.key === "m2.export_dataset");
+  const loopItem = items.find((i) => i.key === "m2.loop_dataset");
+  const exportItem = items.find((i) => i.key === "m2.export_dataset");
 
-    // Nothing to inspect yet
-    if (items.length === 0) {
-      const lines = [
-        "Drag your preprocessing blocks into a single chain under the sample image. Each stage builds on the previous one.",
-        "Start by choosing a dataset, grabbing a sample image block, then stack the preprocessing steps straight underneath.",
-        "Think of this like plumbing: connect the dataset tap, attach the sample image, then route the flow through the blocks this stage cares about.",
-      ];
-      setBaymaxState(pickLine(lines, stageKey + "-empty"), "neutral", false);
-      return;
-    }
+  // Nothing to inspect yet
+  if (items.length === 0) {
+    const lines = [
+      "Drag your preprocessing blocks into a single chain under the sample image. Each stage builds on the previous one.",
+      "Start by choosing a dataset, grabbing a sample image block, then stack the preprocessing steps straight underneath.",
+      "Think of this like plumbing: connect the dataset tap, attach the sample image, then route the flow through the blocks this stage cares about.",
+    ];
+    setBaymaxState(pickLine(lines, stageKey + "-empty"), "neutral", false);
+    return;
+  }
 
-    /* ---------- Wrong-place blocks ---------- */
-    if (wrong.length > 0) {
-      // For pipeline stages 1–4, we want the top-to-bottom
-      // "after this block should be THAT block" style hints.
-      if (s.type === "pipeline" && ["1", "2", "3", "4"].includes(stageKey)) {
-        // Special param hints first: 150×150 and normalize-mode for 3 & 4
-        if (
-          (stageKey === "3" || stageKey === "4") &&
-          missing.length === 0 &&
-          hints.resizePadAlmost150
-        ) {
-          if (stageKey === "4") {
-            const lines = [
-              "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
-              "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
-              "Structure looks good. The next step is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
-            ];
-            setBaymaxState(
-              pickLine(lines, stageKey + "-wrong-params-150-stage4"),
-              "warning",
-              true
-            );
-            return;
-          }
-
-          // Stage 3
+  /* ---------- Wrong-place blocks ---------- */
+  if (wrong.length > 0) {
+    // For pipeline stages 1–4, we want the top-to-bottom
+    // "after this block should be THAT block" style hints.
+    if (s.type === "pipeline" && ["1", "2", "3", "4"].includes(stageKey)) {
+      // Special param hints first: 150×150 and normalize-mode for 3 & 4
+      if (
+        (stageKey === "3" || stageKey === "4") &&
+        missing.length === 0 &&
+        hints.resizePadAlmost150
+      ) {
+        if (stageKey === "4") {
           const lines = [
-            "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
-            "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
-            "The structure is correct. The last piece is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
+            "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
+            "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
+            "Structure looks good. The next step is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
           ];
           setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-params-150"),
+            pickLine(lines, stageKey + "-wrong-params-150-stage4"),
             "warning",
             true
           );
           return;
         }
 
-        if (stageKey === "4" && missing.length === 0 && hints.normalizeModeNot01) {
-          const lines = [
-            "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
-            "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
-            "Normalization is in the right place, but its mode doesn’t match the stage goal. Pick the 0–1 mode: other modes are valid in real projects, but this exercise wants 0–1 specifically.",
-          ];
-          setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-normalize-mode"),
-            "warning",
-            true
-          );
-          return;
-        }
-
-        // Now do the "after this block, that block should be here" logic.
-        const seqLine = pipelineNextStepHint(s, items);
-        if (seqLine) {
-          setBaymaxState(seqLine, "warning", true);
-          return;
-        }
-        // If we somehow can't compute a sequence hint, fall through
-        // to the generic wrong-place messages below.
+        // Stage 3
+        const lines = [
+          "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
+          "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
+          "The structure is correct. The last piece is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
+        ];
+        setBaymaxState(
+          pickLine(lines, stageKey + "-wrong-params-150"),
+          "warning",
+          true
+        );
+        return;
       }
 
-      // Loop/export stage (Stage 5) or generic fallback
-      const lines =
-        s.type === "loop_export"
-          ? [
-              loopItem?.state === "wrong_place" && !exportItem
-                ? "Your loop is there, but the rest of the pipeline around it is a bit jumbled. Inside the loop should look like a mini preprocessing chain, and the save step should live just after the loop block."
-                : "You’ve got the right ideas, but some blocks are in odd places. Make sure the loop body processes one image at a time, and the export block sits after the loop to write out the full dataset.",
-              "Your factory line is a bit scrambled. Keep all the preprocessing steps inside the loop body, then place the export block as the final step outside.",
-              "Loop check: the loop body should be ‘sample in → preprocess → result out’, then a single export block after the loop saves the processed dataset.",
-            ]
-          : [
-              "You dropped some good blocks, but the order feels off. Earlier structural changes should sit closer to the sample image, and small tweaks can come later.",
-              "Nice ingredients, slightly chaotic recipe. Try dragging blocks up or down so the story is: sample → tone/detail tweaks → big shape/size changes → numeric normalization.",
-              "The chain is almost there, but the order matters. Think: brightness/contrast and sharpening first, then resizing and padding, then any normalize steps near the end.",
-            ];
+      if (stageKey === "4" && missing.length === 0 && hints.normalizeModeNot01) {
+        const lines = [
+          "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
+          "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
+          "Normalization is in the right place, but its mode doesn’t match the stage goal. Pick the 0–1 mode: other modes are valid in real projects, but this exercise wants 0–1 specifically.",
+        ];
+        setBaymaxState(
+          pickLine(lines, stageKey + "-wrong-normalize-mode"),
+          "warning",
+          true
+        );
+        return;
+      }
+
+      // Now do the "after this block, that block should be here" logic.
+      const seqLine = pipelineNextStepHint(s, items);
+      if (seqLine) {
+        setBaymaxState(seqLine, "warning", true);
+        return;
+      }
+      // If we somehow can't compute a sequence hint, fall through
+      // to the generic wrong-place messages below.
+    }
+
+    // 🔹 NEW: Stage 5 – loop body has resize/pad but not 150×150
+    if (
+      s.type === "loop_export" &&
+      stageKey === "5" &&
+      missing.length === 0 &&
+      hints.resizePadAlmost150
+    ) {
+      const lines = [
+        "Inside the loop you’ve wired up resize and pad, which is perfect. Now set both of them to exactly 150 × 150 so every image your loop exports matches the earlier stages.",
+        "Your loop body has the right structure, but the frame size is off. Change the resize and pad blocks inside the loop to 150×150 so the exported dataset lines up with the target.",
+        "Loop pipeline detected: resize and pad are in place, but not yet at 150 × 150. Update those values inside the loop so every processed image lands in the same square.",
+      ];
       setBaymaxState(
-        pickLine(lines, stageKey + "-wrong-" + wrong.length),
+        pickLine(lines, stageKey + "-wrong-params-150-loop"),
         "warning",
         true
       );
       return;
     }
 
-    /* ---------- Missing blocks ---------- */
-    if (missing.length > 0) {
-      if (s.type === "loop_export") {
-        // Stage 5 / loop-export style hints
-        if (loopItem?.state === "missing") {
-          const lines = [
-            "For automation we need a loop first. Add the loop block so your preprocessing recipe can run over many images instead of just one.",
-            "This stage wants a factory, not a single workstation. Drop in the loop block and then move your preprocessing steps inside it.",
-            "We’re missing the loop that repeats your recipe. Add the loop block and plug your preprocessing chain into its body.",
+    // Loop/export stage (Stage 5) or generic fallback
+    const lines =
+      s.type === "loop_export"
+        ? [
+            loopItem?.state === "wrong_place" && !exportItem
+              ? "Your loop is there, but the rest of the pipeline around it is a bit jumbled. Inside the loop should look like a mini preprocessing chain, and the save step should live just after the loop block."
+              : "You’ve got the right ideas, but some blocks are in odd places. Make sure the loop body processes one image at a time, and the export block sits after the loop to write out the full dataset.",
+            "Your factory line is a bit scrambled. Keep all the preprocessing steps inside the loop body, then place the export block as the final step outside.",
+            "Loop check: the loop body should be ‘sample in → preprocess → result out’, then a single export block after the loop saves the processed dataset.",
+          ]
+        : [
+            "You dropped some good blocks, but the order feels off. Earlier structural changes should sit closer to the sample image, and small tweaks can come later.",
+            "Nice ingredients, slightly chaotic recipe. Try dragging blocks up or down so the story is: sample → tone/detail tweaks → big shape/size changes → numeric normalization.",
+            "The chain is almost there, but the order matters. Think: brightness/contrast and sharpening first, then resizing and padding, then any normalize steps near the end.",
           ];
-          setBaymaxState(
-            pickLine(lines, stageKey + "-loop-missing-loop"),
-            "hint",
-            true
-          );
-          return;
-        }
-        if (exportItem?.state === "missing") {
-          const lines = [
-            "Your loop can now process images, but nothing is saving the results. Add an export dataset block after the loop so the processed data is written out.",
-            "Loop is in the right place, now you need an export step after the loop to produce a new dataset.",
-            "We’re missing the last piece: a save step after the loop. Add the export dataset block right under the loop.",
-          ];
-          setBaymaxState(
-            pickLine(lines, stageKey + "-loop-missing-export"),
-            "hint",
-            true
-          );
-          return;
-        }
-
-        const lines = [
-          "For this mission we want the whole preprocessing recipe running inside the loop, then a final step after it that saves everything as a new dataset. Check that all the key steps made it into the loop body.",
-          "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–4 pipeline.",
-          "We still need your full preprocessing recipe inside the loop, and a single export block after the loop that writes out the processed dataset.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-loop-missing-" + missing.length),
-          "hint",
-          true
-        );
-        return;
-      }
-
-      if (stageKey === "1") {
-        const lines = [
-          "This stage is about stripping away color so we only care about light and dark. Make sure your chain includes a grayscale step after the sample image.",
-          "We’re teaching the model to ignore color here. Look for the block that converts to grayscale and wire it in near the top of your chain.",
-          "Somewhere after the sample image we’re expecting a block that collapses color into brightness. Add that in to complete this mission.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else if (stageKey === "2") {
-        const lines = [
-          "Here we’re doing gentle cleanup: brightness/contrast and maybe smoothing or sharpening. Check that you have at least one lighting tweak and one detail/blur tweak in the chain.",
-          "Stage 2 wants tidying blocks: something that adjusts light levels and something that smooths or sharpens edges. Add them after any grayscale step.",
-          "Think of this as making the image easier to read: small brightness/contrast and blur/sharpen steps should both appear in this mission’s chain.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else if (stageKey === "3") {
-        const lines = [
-          "We’re aiming for a clean 150 × 150 landing pad. Make sure the resize step really makes the image 150 × 150, and the padding step uses the same size.",
-          "This mission is all about consistent framing. Check that you both resize to 150×150 and pad to 150×150 so every image lands in the same square.",
-          "Your chain should contain a precise 150×150 resize and a 150×150 pad. If either one is missing or set to a different size, the target image won’t match.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else if (stageKey === "4") {
-        // NEW: Stage 4 also uses the “top-to-bottom next step” logic
-        const seqLine = pipelineNextStepHint(s, items);
-        if (seqLine) {
-          setBaymaxState(seqLine, "hint", true);
-          return;
-        }
-
-        // Fallback if we somehow can't compute a sequence hint
-        const lines = [
-          "The goal now is to get pixel values into a nice, consistent numeric range. Look for the normalize step and place it toward the end of the chain.",
-          "We’re not changing how the image looks, just how the numbers are scaled. Add the normalization block near the bottom of your preprocessing recipe.",
-          "Stage 4 needs a block that rescales pixel values. For this mission we’re focusing on the 0–1 mode so values end up between 0 and 1.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else if (stageKey === "5") {
-        const lines = [
-          "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–4 pipeline, and there should be a save step after the loop.",
-          "We’re almost in production mode. Make sure your loop actually applies the full recipe, and that the export block is ready to write out the new dataset.",
-          "Stage 5 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else if (stageKey === "bonus") {
-        const lines = [
-          "Bonus time: we’re hunting for outlines. Check that your chain includes an edge-focused step, not just brightness or size tweaks.",
-          "For this bonus mission, we want the structure of the object to pop. Add an edge-detection step so the outlines stand out.",
-          "Look for the block that emphasizes edges and shapes. Without it, this bonus pipeline will behave like an ordinary preprocessing stage.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-" + missing.length),
-          "hint",
-          true
-        );
-      } else {
-        const lines = [
-          "Some of the core steps for this stage are still missing. Check which blocks are glowing in the toolbox and make sure they appear in your main chain.",
-          "You’ve started the chain, but a few key blocks are still sitting in the toolbox. Add the ones that match this stage’s title and goal.",
-          "We’re missing at least one of the blocks this stage is trying to teach. Use the glowing toolbox blocks and the target image as your guide, then drop those into the main chain.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-missing-generic-" + missing.length),
-          "hint",
-          true
-        );
-      }
-      return;
-    }
-
-    /* ---------- All checklist items structurally OK ---------- */
-    if (done === items.length && items.length > 0) {
-      // Stage 2: gentle nudge about extreme values
-      if (stageKey === "2" && (hints.extremeBC || hints.extremeBlurSharp)) {
-        const lines = [
-          "Your Stage 2 pipeline is structurally correct, but those brightness/contrast or blur/sharpen values are pretty strong. For preprocessing we usually prefer gentle nudges. Try smaller numbers so the images don’t look over-edited.",
-          "Mission complete, with one optimization note: tone and blur settings work best when they’re subtle. Try dialing the sliders back a bit and watch how the preview changes.",
-          "You’ve passed this stage, but I’d recommend softening the brightness/contrast or blur/sharpen parameters. Think ‘cleanup’, not ‘dramatic filter’.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-done-soften"),
-          "hint",
-          true
-        );
-        return;
-      }
-
-      if (s.type === "loop_export") {
-        const lines = [
-          "Nice, you’ve turned your preprocessing into a full-on production line and saved out a new dataset. Hit Submit & Run when you’re ready to process the real thing.",
-          "Factory mode activated: your loop runs the full recipe and the export block is ready. When you’re ready, submit to process the real dataset.",
-          "That’s a solid automation pipeline. Your loop plus export block mirrors how real ML teams prep data before training.",
-        ];
-        setBaymaxState(
-          pickLine(lines, stageKey + "-done-loop"),
-          "success",
-          false
-        );
-      } else if (stageKey === "3") {
-        const lines = [
-          "Perfect 150 × 150 landing pad! Your resize and padding now work together so every image ends up in the same square frame.",
-          "Your framing looks great: every sample should now land in a clean 150×150 window, just like the target.",
-          "Nice work! Your resize and pad combo lock images into the exact square shape this stage is aiming for.",
-        ];
-        setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
-      } else if (stageKey === "4") {
-        const lines = [
-          "Great, your normalization step is in the right place and mode. Pixel values should now live in a stable 0–1 range for this stage.",
-          "Numbers under control: your normalize block and its 0–1 mode give the model a calm, predictable input range.",
-          "Stage 4 complete: your pipeline now ends with a clean normalization step, putting pixel values in the 0–1 range we wanted to practice.",
-        ];
-        setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
-      } else {
-        const lines = [
-          "This chain looks solid for this stage. If the target image on the right matches what you’re getting, you’re good to go. Try Submit & Run.",
-          "All the stage blocks are in place and in a sensible order. Compare with the target image, then submit when you’re happy.",
-          "Everything this stage was asking for is now wired up. If the visual goal looks aligned, you’re ready to run the pipeline.",
-        ];
-        setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
-      }
-      return;
-    }
-
-    /* ---------- Fallback “nearly there” ---------- */
-    const lines = [
-      "You’re close. Keep everything in one chain under the sample image and compare your result to the target image. The differences will tell you which block to tweak next.",
-      "Almost there. Use the target image and the stage blocks counter as a checklist: one or two blocks just need to be added or nudged.",
-      "You’re on the right track. Follow the glowing blocks in the toolbox and the target image on the right to decide what to change next.",
-    ];
     setBaymaxState(
-      pickLine(lines, stageKey + "-nearly-" + done),
-      "neutral",
+      pickLine(lines, stageKey + "-wrong-" + wrong.length),
+      "warning",
       true
     );
+    return;
   }
+
+  /* ---------- Missing blocks ---------- */
+  if (missing.length > 0) {
+    if (s.type === "loop_export") {
+      // Stage 5 / loop-export style hints
+      if (loopItem?.state === "missing") {
+        const lines = [
+          "For automation we need a loop first. Add the loop block so your preprocessing recipe can run over many images instead of just one.",
+          "This stage wants a factory, not a single workstation. Drop in the loop block and then move your preprocessing steps inside it.",
+          "We’re missing the loop that repeats your recipe. Add the loop block and plug your preprocessing chain into its body.",
+        ];
+        setBaymaxState(
+          pickLine(lines, stageKey + "-loop-missing-loop"),
+          "hint",
+          true
+        );
+        return;
+      }
+      if (exportItem?.state === "missing") {
+        const lines = [
+          "Your loop can now process images, but nothing is saving the results. Add an export dataset block after the loop so the processed data is written out.",
+          "Loop is in the right place, now you need an export step after the loop to produce a new dataset.",
+          "We’re missing the last piece: a save step after the loop. Add the export dataset block right under the loop.",
+        ];
+        setBaymaxState(
+          pickLine(lines, stageKey + "-loop-missing-export"),
+          "hint",
+          true
+        );
+        return;
+      }
+
+      const lines = [
+        "For this mission we want the whole preprocessing recipe running inside the loop, then a final step after it that saves everything as a new dataset. Check that all the key steps made it into the loop body.",
+        "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–4 pipeline.",
+        "We still need your full preprocessing recipe inside the loop, and a single export block after the loop that writes out the processed dataset.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-loop-missing-" + missing.length),
+        "hint",
+        true
+      );
+      return;
+    }
+
+    if (stageKey === "1") {
+      const lines = [
+        "This stage is about stripping away color so we only care about light and dark. Make sure your chain includes a grayscale step after the sample image.",
+        "We’re teaching the model to ignore color here. Look for the block that converts to grayscale and wire it in near the top of your chain.",
+        "Somewhere after the sample image we’re expecting a block that collapses color into brightness. Add that in to complete this mission.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else if (stageKey === "2") {
+      const lines = [
+        "Here we’re doing gentle cleanup: brightness/contrast and maybe smoothing or sharpening. Check that you have at least one lighting tweak and one detail/blur tweak in the chain.",
+        "Stage 2 wants tidying blocks: something that adjusts light levels and something that smooths or sharpens edges. Add them after any grayscale step.",
+        "Think of this as making the image easier to read: small brightness/contrast and blur/sharpen steps should both appear in this mission’s chain.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else if (stageKey === "3") {
+      const lines = [
+        "We’re aiming for a clean 150 × 150 landing pad. Make sure the resize step really makes the image 150 × 150, and the padding step uses the same size.",
+        "This mission is all about consistent framing. Check that you both resize to 150×150 and pad to 150×150 so every image lands in the same square.",
+        "Your chain should contain a precise 150×150 resize and a 150×150 pad. If either one is missing or set to a different size, the target image won’t match.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else if (stageKey === "4") {
+      // Stage 4 also uses the “top-to-bottom next step” logic
+      const seqLine = pipelineNextStepHint(s, items);
+      if (seqLine) {
+        setBaymaxState(seqLine, "hint", true);
+        return;
+      }
+
+      // Fallback if we somehow can't compute a sequence hint
+      const lines = [
+        "The goal now is to get pixel values into a nice, consistent numeric range. Look for the normalize step and place it toward the end of the chain.",
+        "We’re not changing how the image looks, just how the numbers are scaled. Add the normalization block near the bottom of your preprocessing recipe.",
+        "Stage 4 needs a block that rescales pixel values. For this mission we’re focusing on the 0–1 mode so values end up between 0 and 1.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else if (stageKey === "5") {
+      const lines = [
+        "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–4 pipeline, and there should be a save step after the loop.",
+        "We’re almost in production mode. Make sure your loop actually applies the full recipe, and that the export block is ready to write out the new dataset.",
+        "Stage 5 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else if (stageKey === "bonus") {
+      const lines = [
+        "Bonus time: we’re hunting for outlines. Check that your chain includes an edge-focused step, not just brightness or size tweaks.",
+        "For this bonus mission, we want the structure of the object to pop. Add an edge-detection step so the outlines stand out.",
+        "Look for the block that emphasizes edges and shapes. Without it, this bonus pipeline will behave like an ordinary preprocessing stage.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
+    } else {
+      const lines = [
+        "Some of the core steps for this stage are still missing. Check which blocks are glowing in the toolbox and make sure they appear in your main chain.",
+        "You’ve started the chain, but a few key blocks are still sitting in the toolbox. Add the ones that match this stage’s title and goal.",
+        "We’re missing at least one of the blocks this stage is trying to teach. Use the glowing toolbox blocks and the target image as your guide, then drop those into the main chain.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-generic-" + missing.length),
+        "hint",
+        true
+      );
+    }
+    return;
+  }
+
+  /* ---------- All checklist items structurally OK ---------- */
+  if (done === items.length && items.length > 0) {
+    // Stage 2: gentle nudge about extreme values
+    if (stageKey === "2" && (hints.extremeBC || hints.extremeBlurSharp)) {
+      const lines = [
+        "Your Stage 2 pipeline is structurally correct, but those brightness/contrast or blur/sharpen values are pretty strong. For preprocessing we usually prefer gentle nudges. Try smaller numbers so the images don’t look over-edited.",
+        "Mission complete, with one optimization note: tone and blur settings work best when they’re subtle. Try dialing the sliders back a bit and watch how the preview changes.",
+        "You’ve passed this stage, but I’d recommend softening the brightness/contrast or blur/sharpen parameters. Think ‘cleanup’, not ‘dramatic filter’.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-done-soften"),
+        "hint",
+        true
+      );
+      return;
+    }
+
+    if (s.type === "loop_export") {
+      const lines = [
+        "Nice, you’ve turned your preprocessing into a full-on production line and saved out a new dataset. Hit Submit & Run when you’re ready to process the real thing.",
+        "Factory mode activated: your loop runs the full recipe and the export block is ready. When you’re ready, submit to process the real dataset.",
+        "That’s a solid automation pipeline. Your loop plus export block mirrors how real ML teams prep data before training.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-done-loop"),
+        "success",
+        false
+      );
+    } else if (stageKey === "3") {
+      const lines = [
+        "Perfect 150 × 150 landing pad! Your resize and padding now work together so every image ends up in the same square frame.",
+        "Your framing looks great: every sample should now land in a clean 150×150 window, just like the target.",
+        "Nice work! Your resize and pad combo lock images into the exact square shape this stage is aiming for.",
+      ];
+      setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
+    } else if (stageKey === "4") {
+      const lines = [
+        "Great, your normalization step is in the right place and mode. Pixel values should now live in a stable 0–1 range for this stage.",
+        "Numbers under control: your normalize block and its 0–1 mode give the model a calm, predictable input range.",
+        "Stage 4 complete: your pipeline now ends with a clean normalization step, putting pixel values in the 0–1 range we wanted to practice.",
+      ];
+      setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
+    } else {
+      const lines = [
+        "This chain looks solid for this stage. If the target image on the right matches what you’re getting, you’re good to go. Try Submit & Run.",
+        "All the stage blocks are in place and in a sensible order. Compare with the target image, then submit when you’re happy.",
+        "Everything this stage was asking for is now wired up. If the visual goal looks aligned, you’re ready to run the pipeline.",
+      ];
+      setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
+    }
+    return;
+  }
+
+  /* ---------- Fallback “nearly there” ---------- */
+  const lines = [
+    "You’re close. Keep everything in one chain under the sample image and compare your result to the target image. The differences will tell you which block to tweak next.",
+    "Almost there. Use the target image and the stage blocks counter as a checklist: one or two blocks just need to be added or nudged.",
+    "You’re on the right track. Follow the glowing blocks in the toolbox and the target image on the right to decide what to change next.",
+  ];
+  setBaymaxState(
+    pickLine(lines, stageKey + "-nearly-" + done),
+    "neutral",
+    true
+  );
+}
+
 
 
 

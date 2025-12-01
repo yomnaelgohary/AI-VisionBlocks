@@ -213,6 +213,10 @@ export const module2Stages: StageConfig[] = [
       "m2.normalize",
     ],
     requireExportAfterLoop: true,
+    targetOps: [
+  { type: "resize", mode: "size", w: 150, h: 150 },
+  { type: "pad", w: 150, h: 150, mode: "constant", r: 0, g: 0, b: 0 }
+]
   },
 
   // BONUS – Edge Detection (unchanged)
