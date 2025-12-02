@@ -57,9 +57,16 @@ export const module2Stages: StageConfig[] = [
     ],
     help: {
       title: "What is Grayscale?",
-      text:
-        "Grayscale turns a color image into shades of gray by removing red, green, and blue information. Each pixel now stores only brightness (0 = black, 255 = white). This helps models focus on shapes, edges, and textures instead of color differences. " +
-        "For example, if you are detecting tools or plastic bottles, their outlines matter more than their color. Removing color also reduces the input size, making training faster.",
+      text: `
+    A grayscale image removes all colors and keeps only brightness (how light or dark each pixel is).
+    Why would we do that?
+
+    • Many tasks rely on shape, outline, or texture—not color.
+    • Removing color makes the model focus on structure instead of distractions.
+    • It also reduces the input size, making everything faster.
+
+    Think of it like drawing with a pencil before painting, to get the structure right first.
+    `.trim(),
     },
     requiredBlocks: ["m2.to_grayscale"],
     expectedOrder: ["m2.to_grayscale"],
@@ -76,12 +83,19 @@ export const module2Stages: StageConfig[] = [
       "Use a small sharpen value to make edges pop, or a tiny blur to smooth noise.",
     ],
     help: {
-      title: "Brightness, Contrast, and Sharpness",
-      text:
-        "Brightness controls how light or dark the overall image looks by shifting pixel values up or down. Contrast changes how strong the difference is between light and dark areas, making edges stand out more or less. " +
-        "Sharpening emphasizes edges and fine details, while blurring smooths noisy textures.\n\n" +
-        "In preprocessing, small adjustments help the model handle different lighting conditions (indoor vs outdoor, shadows, etc.) without changing the meaning of the image. " +
-        "The goal is to make structure easier to see, not to create a completely new image.",
+      title: "Why Adjust Brightness, Contrast, and Sharpness?",
+      text: `
+    Real photos often have problems: dark areas, bright lamps, blurry edges, or random noise.
+    These small fixes help the model see the important parts more clearly.
+
+    • Brightness: makes the whole image lighter or darker.
+    • Contrast: increases the difference between light and dark areas.
+    • Sharpen: makes edges and details easier to see.
+    • Blur: gently smooths noisy or grainy areas.
+
+    The goal is not to dramatically change the image, but to make it clean and easy to understand,
+    just like wiping dust off a camera lens before taking a picture.
+    `.trim(),
     },
     // We build on Stage 1, then add brightness/contrast + blur/sharpen
     requiredBlocks: ["m2.to_grayscale", "m2.brightness_contrast", "m2.blur_sharpen"],
@@ -103,11 +117,18 @@ export const module2Stages: StageConfig[] = [
       "Then pad to a clean 150×150 square so every sample fits the same frame.",
     ],
     help: {
-      title: "Resizing and Padding Together",
-      text:
-        "Datasets rarely come with perfectly aligned image sizes. A model, however, expects all inputs to have the same width and height. Resizing adjusts the image so that it fits within a target size while preserving its aspect ratio to avoid stretching or squishing objects.\n\n" +
-        "Even after resizing with aspect ratio preserved, you may still have leftover margins. Padding adds pixels (often a constant color) around the image so it reaches an exact shape, such as 150×150. " +
-        "Think of it like putting differently sized photos into identically sized frames, so they all line up nicely for your neural network.",
+      title: "Why Resize and Pad Images?",
+      text: `
+    Neural networks expect every image to be the same size, but real datasets come in all shapes:
+    wide, tall, small, big, or anything in between.
+
+    • Resize: shrinks or expands the image so its biggest side fits the target size.
+      (We keep the original shape so things don’t look stretched or squished.)
+    • Pad: adds blank space around the image so it becomes a perfect square like 150×150.
+
+    Imagine placing many different photos into identical picture frames.  
+    Resizing makes them fit inside; padding fills the leftover space so the frame stays neat.
+    `.trim(),
     },
     // Build on Stage 2, then add resize + pad
     requiredBlocks: [
@@ -146,11 +167,18 @@ export const module2Stages: StageConfig[] = [
     ],
     help: {
       title: "Why Normalize Pixel Values?",
-      text:
-        "Raw pixel values usually sit between 0 and 255. Feeding those directly into a neural network can make training unstable, because gradients can become too large or too small. " +
-        "Normalization rescales all pixel values into a friendlier range like 0–1 or -1–1.\n\n" +
-        "This makes images more comparable to each other and helps the optimizer move in smoother, more predictable steps. " +
-        "It is similar to grading all exams on the same scale before averaging scores.",
+      text: `
+    Raw pixel values go from 0 to 255.  
+    Feeding these big numbers into a model can make learning uneven or unstable.
+
+    Normalization rescales every pixel into a small, predictable range like 0–1. This helps because:
+
+    • All images become comparable to each other.
+    • The model learns more smoothly and consistently.
+    • Training becomes faster and avoids “wild jumps”.
+
+    It’s like converting all exam scores to a 0–1 scale before averaging them, everything becomes fair and stable.
+    `.trim(),
     },
     // Build on Stage 3, then add normalization at the end
     requiredBlocks: [
@@ -189,12 +217,17 @@ export const module2Stages: StageConfig[] = [
       "Then export a new processed dataset that you can use in later modules.",
     ],
     help: {
-      title: "Looping Through the Dataset and Exporting",
-      text:
-        "So far you have tested your pipeline on a single sample image. The loop block lets you apply that same sequence of steps to many or all images in the dataset automatically. " +
-        "Inside the loop, each image is processed in turn using your pipeline.\n\n" +
-        "After the loop, the export block saves these processed images as a new dataset. " +
-        "That gives you a clean, standardized dataset ready for training in later modules.",
+      title: "Why Use a Loop and Export the Dataset?",
+      text: `
+    So far, you tested your pipeline on a single sample image. In real projects, you need to apply the same steps to *every* image.
+
+    • The loop runs your processing pipeline on one image at a time.
+    • It repeats until all images in the dataset are processed.
+    • The export block saves these cleaned images as a brand-new dataset.
+
+    Think of it like applying the same photo filter to an entire album automatically,
+    then saving the whole improved collection for training later.
+    `.trim(),
     },
     requiredBlocksWithinLoop: [
       "m2.to_grayscale",
@@ -229,12 +262,17 @@ export const module2Stages: StageConfig[] = [
       "This is useful for shape-heavy tasks, but not required for every dataset.",
     ],
     help: {
-      title: "When to Use Edge Detection",
-      text:
-        "Edge detection highlights areas where brightness changes sharply. These are usually object boundaries or strong texture transitions. " +
-        "Methods like Canny or Sobel look for these changes and produce an image that mostly shows edges.\n\n" +
-        "This is helpful when object shape and structure are more important than color or shading, such as symbols or signs. " +
-        "For natural images, it can throw away useful information, so it is more of a special tool than a default step.",
+      title: "When Should You Use Edge Detection?",
+      text: `
+    Edge detection highlights where brightness changes sharply, usually object outlines or strong textures.
+
+    It’s useful when:
+    • Shape matters more than color (like signs, symbols, tools).
+    • You want the model to pay attention to boundaries.
+
+    But for natural photos (animals, landscapes, people), edges can remove too much information.
+    So think of edge detection as a special tool, not a default step, in your image toolbox.
+    `.trim(),
     },
     requiredBlocks: ["m2.edges"],
     expectedOrder: ["m2.edges"],

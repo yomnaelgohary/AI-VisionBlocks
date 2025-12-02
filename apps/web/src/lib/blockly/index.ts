@@ -659,74 +659,51 @@ const C_AMBER4 = 40;  // Evaluation
   init: function () {
     this.appendDummyInput("ROW")
       .appendField("add conv layer")
-      .appendField("strength")
-      .appendField(
-        new (Blockly as any).FieldDropdown([
-          ["Light", "light"],   // e.g., 16 filters
-          ["Medium", "medium"], // 32
-          ["Strong", "strong"], // 64
-        ]),
-        "STRENGTH"
-      );
     setStatement(this);
     this.setColour(C_PURPLE);
     appendInfo(
       this,
-      "A convolutional layer helps the model notice shapes and patterns. Strength chooses how many filters to learn.",
+      "A convolutional layer helps the model notice shapes and patterns. This block uses a light strength by default.",
       "ROW",
       "Convolution layer"
     );
   },
 };
 
+
 // Pooling layer (2×2)
 (Blockly as any).Blocks["m4.layer_pool"] = {
   init: function () {
     this.appendDummyInput("ROW")
       .appendField("add pooling layer")
-      .appendField("type")
-      .appendField(
-        new (Blockly as any).FieldDropdown([
-          ["Max", "max"],
-          ["Average", "avg"],
-        ]),
-        "TYPE"
-      );
     setStatement(this);
     this.setColour(C_PURPLE);
     appendInfo(
       this,
-      "Pooling shrinks the image gently so the model focuses on the big picture.",
+      "Pooling shrinks the image gently so the model focuses on the big picture. This block uses 2×2 max pooling by default.",
       "ROW",
       "Pooling"
     );
   },
 };
 
+
 // Dense layer (abstract size)
 (Blockly as any).Blocks["m4.layer_dense"] = {
   init: function () {
     this.appendDummyInput("ROW")
       .appendField("add dense layer")
-      .appendField("size")
-      .appendField(
-        new (Blockly as any).FieldDropdown([
-          ["Small", "small"],   // 64
-          ["Medium", "medium"], // 128
-          ["Large", "large"],   // 256
-        ]),
-        "SIZE"
-      );
     setStatement(this);
     this.setColour(C_PURPLE);
     appendInfo(
       this,
-      "Dense layers mix all the learned features to decide the final answer.",
+      "Dense layers mix all the learned features to decide the final answer. This block uses a small size by default.",
       "ROW",
       "Dense layer"
     );
   },
 };
+
 
 // Model summary (instant card)
 (Blockly as any).Blocks["m4.model_summary"] = {
@@ -793,25 +770,17 @@ const C_AMBER4 = 40;  // Evaluation
       .appendField("training setup")
       .appendField("epochs")
       .appendField(new (Blockly as any).FieldNumber(5, 1, 10, 1), "EPOCHS")
-      .appendField("batch")
-      .appendField(
-        new (Blockly as any).FieldDropdown([
-          ["Small (16)", "16"],
-          ["Medium (32)", "32"],
-          ["Large (64)", "64"],
-        ]),
-        "BATCH"
-      );
     setStatement(this);
     this.setColour(C_CYAN);
     appendInfo(
       this,
-      "How many rounds to learn (epochs), and how many pictures at a time (batch size).",
+      "How many rounds to learn (epochs). Batch size is fixed to 16 in this module.",
       "ROW",
       "Training setup"
     );
   },
 };
+
 
 (Blockly as any).Blocks["m4.train_start"] = {
   init: function () {

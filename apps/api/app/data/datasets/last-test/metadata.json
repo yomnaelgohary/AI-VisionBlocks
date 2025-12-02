@@ -1,0 +1,48 @@
+{
+  "name": "last-test",
+  "base_dataset": "recyclables-mini",
+  "num_classes": 3,
+  "classes": [
+    "metal",
+    "paper",
+    "plastic"
+  ],
+  "image_count": 178,
+  "preprocessing": [
+    {
+      "type": "to_grayscale"
+    },
+    {
+      "type": "brightness_contrast",
+      "b": 10,
+      "c": 10
+    },
+    {
+      "type": "blur_sharpen",
+      "blur": 4,
+      "sharp": 10
+    },
+    {
+      "type": "resize",
+      "mode": "size",
+      "w": 150,
+      "h": 150,
+      "keep": "TRUE"
+    },
+    {
+      "type": "pad",
+      "w": 150,
+      "h": 150,
+      "mode": "constant",
+      "r": 0,
+      "g": 0,
+      "b": 0
+    },
+    {
+      "type": "normalize",
+      "mode": "zero_one"
+    }
+  ],
+  "format": "same_as_source",
+  "version": "1.0.0"
+}

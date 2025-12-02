@@ -1,5 +1,14 @@
 "use client";
 
+type SubmissionModalProps = {
+  open: boolean;
+  onClose: () => void;
+  dark?: boolean;
+  title?: string;
+  lines?: string[];
+  success?: boolean;
+};
+
 export default function SubmissionModal({
   open,
   onClose,
@@ -7,30 +16,34 @@ export default function SubmissionModal({
   title,
   lines,
   success,
-}: {
-  open: boolean;
-  onClose: () => void;
-  dark?: boolean;
-  title?: string;
-  lines?: string[];
-  success?: boolean;
-}) {
+}: SubmissionModalProps) {
   if (!open) return null;
 
   const isSuccess = success === true;
-  const isError = success === false && title === "Error";
+  // Treat anything with "error" in the title as a hard error, otherwise it's just feedback
+  const isError = success === false && (title?.toLowerCase().includes("error") ?? false);
 
-  const overlayBg = dark ? "bg-black/60" : "bg-slate-900/45";
+  const isDark = !!dark;
 
-  const cardBg = dark
-    ? "from-slate-900/95 via-slate-900/90 to-slate-950"
-    : "from-white/98 via-white/96 to-[#E3E7F5]";
-  const cardBorder = dark ? "border-slate-700/70" : "border-white/80";
-  const textMain = dark ? "text-slate-50" : "text-slate-900";
-  const textSub = dark ? "text-slate-300" : "text-slate-600";
+  // ----- Theming (unique palette for submission vs info) -----
+  const overlayBg = isDark ? "bg-black/70" : "bg-slate-900/45";
+
+  const haloGradient = isSuccess
+    ? "from-emerald-400/70 via-emerald-500/60 to-teal-400/70"
+    : isError
+    ? "from-rose-400/70 via-orange-400/60 to-red-500/70"
+    : "from-sky-400/75 via-indigo-400/65 to-cyan-400/75";
+
+  const cardSurface = isDark
+    ? "bg-slate-950/95"
+    : "bg-gradient-to-b from-white/98 via-white/97 to-[#E5ECFF]";
+
+  const cardBorder = isDark ? "border-slate-700/70" : "border-white/80";
+  const textMain = isDark ? "text-slate-50" : "text-slate-900";
+  const textSub = isDark ? "text-slate-300" : "text-slate-600";
 
   const badgeBase =
-    "inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border shadow-sm";
+    "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border shadow-sm";
 
   const badgeCls = isSuccess
     ? "bg-emerald-50 border-emerald-200 text-emerald-700"
@@ -39,117 +52,183 @@ export default function SubmissionModal({
     : "bg-sky-50 border-sky-200 text-sky-700";
 
   const iconBg = isSuccess
-    ? "bg-gradient-to-br from-emerald-400 to-emerald-500 text-white"
+    ? "bg-emerald-500"
     : isError
-    ? "bg-gradient-to-br from-rose-400 to-rose-500 text-white"
-    : "bg-gradient-to-br from-sky-400 to-sky-500 text-white";
+    ? "bg-rose-500"
+    : "bg-sky-500";
 
-  const iconGlow = isSuccess
-    ? "shadow-[0_0_18px_rgba(16,185,129,0.75)]"
+  const iconRing = isSuccess
+    ? "shadow-[0_0_24px_rgba(16,185,129,0.85)]"
     : isError
-    ? "shadow-[0_0_18px_rgba(239,68,68,0.75)]"
-    : "shadow-[0_0_18px_rgba(56,189,248,0.75)]";
+    ? "shadow-[0_0_24px_rgba(239,68,68,0.85)]"
+    : "shadow-[0_0_24px_rgba(56,189,248,0.85)]";
 
   const primaryBtnBase =
     "px-4 py-1.5 rounded-full text-sm font-semibold transition inline-flex items-center justify-center";
 
   const primaryBtnCls = isSuccess
-    ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md hover:shadow-[0_0_15px_rgba(16,185,129,0.7)]"
+    ? "bg-emerald-500 hover:bg-emerald-400 text-white shadow-md hover:shadow-[0_0_18px_rgba(16,185,129,0.8)]"
     : isError
-    ? "bg-rose-500 hover:bg-rose-400 text-white shadow-md hover:shadow-[0_0_15px_rgba(239,68,68,0.7)]"
-    : "bg-sky-500 hover:bg-sky-400 text-white shadow-md hover:shadow-[0_0_15px_rgba(56,189,248,0.7)]";
+    ? "bg-rose-500 hover:bg-rose-400 text-white shadow-md hover:shadow-[0_0_18px_rgba(239,68,68,0.8)]"
+    : "bg-sky-500 hover:bg-sky-400 text-white shadow-md hover:shadow-[0_0_18px_rgba(56,189,248,0.8)]";
+
+  const pillLabel = isSuccess ? "Stage complete" : isError ? "Run error" : "Stage feedback";
+
+  const defaultTitle = isSuccess
+    ? "You finished the stage!"
+    : isError
+    ? "Something went wrong while running"
+    : "Keep tuning this stage";
+
+  const bodyLead = isSuccess
+    ? ""
+    : isError
+    ? "The backend hit an error. Check the notes below, fix anything obvious, and run the stage again."
+    : "These notes tell you what still needs adjusting. Nudge a few blocks around and try another run.";
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center"
+      aria-modal="true"
+      role="dialog"
+    >
       {/* Backdrop */}
       <div
-        className={`absolute inset-0 ${overlayBg} backdrop-blur-sm transition-opacity`}
+        className={`absolute inset-0 ${overlayBg} backdrop-blur-md transition-opacity`}
         onClick={onClose}
       />
 
-      {/* Card */}
-      <div
-        className={`
-          relative z-50 max-w-md w-[90%]
-          rounded-3xl border ${cardBorder}
-          bg-gradient-to-b ${cardBg}
-          shadow-[0_22px_60px_rgba(15,23,42,0.45)]
-          px-5 pt-5 pb-4
-          animate-[fadeInUp_0.2s_ease-out]
-        `}
-      >
-        {/* Icon + title row */}
-        <div className="flex items-start gap-3">
-          {/* Icon */}
-          <div
-            className={`
-              mt-1 h-10 w-10 rounded-2xl flex items-center justify-center
-              ${iconBg} ${iconGlow}
-            `}
-          >
-            {isSuccess ? (
-              <span className="text-lg">✓</span>
-            ) : isError ? (
-              <span className="text-lg">!</span>
-            ) : (
-              <span className="text-lg">★</span>
-            )}
-          </div>
+      {/* Card shell with glowing halo */}
+      <div className="relative z-50 w-[92%] max-w-md mx-auto">
+        {/* Halo / shine */}
+        <div
+          className={`
+            pointer-events-none absolute inset-0 -inset-1
+            rounded-[28px]
+            bg-gradient-to-br ${haloGradient}
+            opacity-70 blur-xl
+          `}
+          aria-hidden="true"
+        />
 
-          {/* Title / subtitle */}
-          <div className="flex-1">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className={`text-base font-semibold ${textMain}`}>
-                {title || (isSuccess ? "Nice!" : "Heads up")}
-              </h2>
-              <span className={`${badgeBase} ${badgeCls}`}>
-                {isSuccess ? "Mission 1" : "Feedback"}
-              </span>
+        {/* Main card */}
+        <div
+          className={`
+            relative rounded-3xl border ${cardBorder}
+            ${cardSurface}
+            shadow-[0_22px_60px_rgba(15,23,42,0.5)]
+            px-5 pt-5 pb-4
+            overflow-hidden
+            animate-[fadeInUp_0.22s_ease-out]
+          `}
+        >
+          {/* Subtle grid / shine overlay */}
+          <div
+            className="pointer-events-none absolute inset-0 opacity-[0.08] bg-[radial-gradient(circle_at_top,_#ffffff_0,_transparent_55%)]"
+            aria-hidden="true"
+          />
+
+          {/* Content */}
+          <div className="relative">
+            {/* Icon + title */}
+            <div className="flex items-start gap-3">
+              {/* Icon */}
+              <div
+                className={`
+                  mt-1 h-10 w-10 rounded-2xl flex items-center justify-center
+                  ${iconBg} ${iconRing}
+                  text-white text-lg
+                `}
+              >
+                {isSuccess ? "✓" : isError ? "!" : "★"}
+              </div>
+
+              {/* Title & badge */}
+              <div className="flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className={`text-base font-semibold ${textMain}`}>
+                    {title || defaultTitle}
+                  </h2>
+                  <span className={`${badgeBase} ${badgeCls}`}>{pillLabel}</span>
+                </div>
+
+                {bodyLead && (
+                  <p className={`mt-1 text-xs leading-relaxed ${textSub}`}>{bodyLead}</p>
+                )}
+              </div>
+
+              {/* Close pill (top-right) */}
+              <button
+                onClick={onClose}
+                aria-label="Close submission details"
+                className={`
+                  ml-1 rounded-full px-2 py-0.5 text-[11px] font-medium
+                  border border-slate-200/60
+                  bg-white/80 text-slate-600
+                  hover:bg-white
+                  shadow-sm
+                  transition
+                `}
+              >
+                Close
+              </button>
             </div>
 
-            {isSuccess ? (
-              <p className={`mt-1 text-xs ${textSub}`}>
-              </p>
-            ) : (
-              <p className={`mt-1 text-xs ${textSub}`}>
-                Read the notes below, nudge a few blocks around, and try again. You’re
-                closer than it looks.
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Body lines */}
-        {lines && lines.length > 0 && (
-          <div className="mt-4 space-y-1.5">
-            {lines.map((ln, idx) => (
-              <div
-                key={idx}
-                className={`text-sm ${
-                  isSuccess ? "text-emerald-900" : textSub
-                } flex items-start gap-2`}
-              >
-                <span className="mt-1 inline-block h-1 w-1 rounded-full bg-slate-400/70" />
-                <span>{ln}</span>
+            {/* Lines body */}
+            {lines && lines.length > 0 && (
+              <div className="mt-4 space-y-1.5">
+                {lines.map((ln, idx) => (
+                  <div
+                    key={idx}
+                    className={`text-sm flex items-start gap-2 ${
+                      isSuccess ? "text-emerald-900" : textSub
+                    }`}
+                  >
+                    <span
+                      className={`
+                        mt-1 inline-block h-1.5 w-1.5 rounded-full
+                        ${
+                          isSuccess
+                            ? "bg-emerald-400/80"
+                            : isError
+                            ? "bg-rose-400/80"
+                            : "bg-sky-400/80"
+                        }
+                      `}
+                    />
+                    <span>{ln}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        {/* Footer */}
-        <div className="mt-5 flex items-center justify-end gap-2">
-          {!isSuccess && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-full text-xs font-medium text-slate-600 hover:bg-slate-100/80 border border-slate-200/80 transition"
-            >
-              I’ll adjust it
-            </button>
-          )}
-          <button type="button" onClick={onClose} className={primaryBtnBase + " " + primaryBtnCls}>
-            {isSuccess ? "Nice, got it" : isError ? "Close" : "Try again"}
-          </button>
+            {/* Footer buttons */}
+            <div className="mt-5 flex items-center justify-end gap-2">
+              {!isSuccess && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={`
+                    px-3 py-1.5 rounded-full text-xs font-medium
+                    border border-slate-200/80
+                    bg-white/80 text-slate-600
+                    hover:bg-slate-100
+                    transition
+                  `}
+                >
+                  I’ll adjust it
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className={primaryBtnBase + " " + primaryBtnCls}
+              >
+                {isSuccess ? "Nice, got it" : isError ? "Close" : "Try again"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
