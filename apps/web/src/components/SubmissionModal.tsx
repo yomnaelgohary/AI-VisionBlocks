@@ -88,7 +88,7 @@ export default function SubmissionModal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center"
+      className="fixed inset-0 z-[100] flex items-center justify-center"
       aria-modal="true"
       role="dialog"
     >
@@ -202,30 +202,18 @@ export default function SubmissionModal({
               </div>
             )}
 
-            {/* Footer buttons */}
+            {/* Footer */}
             <div className="mt-5 flex items-center justify-end gap-2">
-              {!isSuccess && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className={`
-                    px-3 py-1.5 rounded-full text-xs font-medium
-                    border border-slate-200/80
-                    bg-white/80 text-slate-600
-                    hover:bg-slate-100
-                    transition
-                  `}
-                >
-                  I’ll adjust it
-                </button>
-              )}
-
               <button
                 type="button"
                 onClick={onClose}
-                className={primaryBtnBase + " " + primaryBtnCls}
+                className={
+                  isSuccess
+                    ? primaryBtnBase + " " + primaryBtnCls
+                    : primaryBtnBase + " " + primaryBtnCls
+                }
               >
-                {isSuccess ? "Nice, got it" : isError ? "Close" : "Try again"}
+                {isSuccess ? "Nice, got it" : "I'll adjust it"}
               </button>
             </div>
           </div>
