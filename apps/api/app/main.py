@@ -29,4 +29,8 @@ app.include_router(train.router)
 @app.on_event("startup")
 def _warmup():
     # Build dataset index in memory for fast access
-    get_datasets_index(force_refresh=True)
+    try:
+        get_datasets_index(force_refresh=True)
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to build dataset index at startup: {e}")
+        # Don't crash the server if index building fails
