@@ -2,7 +2,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routes import health, datasets, preprocess, split, model, evaluate, predict, train
+from app.routes import (
+    health,
+    datasets,
+    preprocess,
+    split,
+    model,
+    evaluate,
+    predict,
+    train,
+    analyzer,
+)
 from app.services.datasets import get_datasets_index
 
 app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION)
@@ -25,6 +35,7 @@ app.include_router(model.router)
 app.include_router(evaluate.router)
 app.include_router(predict.router)
 app.include_router(train.router)
+app.include_router(analyzer.router)
 
 @app.on_event("startup")
 def _warmup():
