@@ -8,31 +8,25 @@ export default function Module2Index() {
   const stages = [
     {
       id: "1",
-      title: "Stage 1: Grayscale",
+      title: "Stage 1: Grayscale + Cleanup",
       short:
-        "Turn color images into simple grayscale so you can focus on shapes and brightness.",
+        "Convert to grayscale and do gentle brightness/contrast and blur/sharpen cleanup.",
     },
     {
       id: "2",
-      title: "Stage 2: Brightness, Contrast, Blur & Sharpen",
-      short:
-        "Clean up lighting and sharpness with gentle brightness/contrast tweaks and small blur/sharpen filters.",
-    },
-    {
-      id: "3",
-      title: "Stage 3: Resize & Pad",
+      title: "Stage 2: Resize & Pad",
       short:
         "Make images fit a consistent square size by resizing with aspect ratio and padding the rest.",
     },
     {
-      id: "4",
-      title: "Stage 4: Normalize",
+      id: "3",
+      title: "Stage 3: Normalize",
       short:
-        "Rescale pixel values to a stable range (like 0–1) so the model trains faster and more smoothly.",
+        "Rescale pixel values to a stable range (like 0–1) so training is smooth and stable.",
     },
     {
-      id: "5",
-      title: "Stage 5: Looping & Exporting",
+      id: "4",
+      title: "Stage 4: Looping & Exporting",
       short:
         "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
     },
@@ -183,7 +177,7 @@ export default function Module2Index() {
                     <div className="flex flex-col">
                       <span className="text-xs text-gray-500">
                         {isBonus
-                          ? "Try this after Stage 5"
+                          ? "Try this after Stage 4"
                           : "Recommended: follow the stages in order"}
                       </span>
                     </div>
@@ -206,7 +200,7 @@ export default function Module2Index() {
       </main>
 
       {/* Global background animation (shared with home style) */}
-      <style jsx global>{`
+      <style>{`
         .animated-bg {
           background: radial-gradient(circle at 20% 20%, #4ba3e480, transparent 65%),
             radial-gradient(circle at 80% 20%, #8b6ff680, transparent 65%),

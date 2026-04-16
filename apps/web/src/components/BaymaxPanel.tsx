@@ -16,7 +16,7 @@ export default function BaymaxPanel({
   const titleCls = dark ? "text-neutral-100" : "text-slate-900";
 
   let bubbleBase =
-    "rounded-2xl px-4 py-3 border text-sm leading-relaxed shadow-md text-center transition-all";
+    "rounded-2xl px-3.5 py-2.5 border text-sm leading-relaxed shadow-md text-center transition-all";
   let bubbleTheme = "";
   let bubbleAnim = "";
 
@@ -67,7 +67,7 @@ export default function BaymaxPanel({
   const hintCls = dark ? "text-neutral-400" : "text-slate-500";
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2.5">
       {/* Heading */}
       <h2 className={`text-sm font-semibold tracking-wide ${titleCls}`}>Baymax</h2>
 
@@ -78,7 +78,7 @@ export default function BaymaxPanel({
           <img
             src="/baymax.png"
             alt="Baymax"
-            className="w-20 h-20 object-contain select-none drop-shadow-xl"
+            className="w-16 h-16 lg:w-20 lg:h-20 object-contain select-none drop-shadow-xl"
             draggable={false}
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).src =

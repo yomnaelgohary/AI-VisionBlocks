@@ -21,7 +21,7 @@ import {
   type StageConfig,
 } from "@/data/module4Stages";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://127.0.0.1:8000";
 
 /* ----------------- HTTP helper ----------------- */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {

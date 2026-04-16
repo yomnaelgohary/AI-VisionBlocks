@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
+import threading
 
 from app.core.config import settings
 from app.routes import (
@@ -39,9 +41,17 @@ app.include_router(analyzer.router)
 
 @app.on_event("startup")
 def _warmup():
-    # Build dataset index in memory for fast access
-    try:
-        get_datasets_index(force_refresh=True)
-    except Exception as e:
-        print(f"⚠️  Warning: Failed to build dataset index at startup: {e}")
-        # Don't crash the server if index building fails
+    # Build dataset index in memory for fast access, without blocking startup.
+    # Set API_WARMUP_DATASETS=0 to skip this background warmup entirely.
+    if os.getenv("API_WARMUP_DATASETS", "1") not in {"1", "true", "TRUE", "yes", "YES"}:
+        print("ℹ️ Dataset warmup skipped (API_WARMUP_DATASETS disabled).")
+        return
+
+    def _warm() -> None:
+        try:
+            get_datasets_index(force_refresh=True)
+            print("✅ Dataset index warmup complete.")
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to build dataset index at startup: {e}")
+
+    threading.Thread(target=_warm, daemon=True).start()

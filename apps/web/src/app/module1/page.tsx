@@ -17,7 +17,8 @@ import MissionChecklistStage, {
   type Tri,
 } from "@/components/MissionChecklistStage";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://127.0.0.1:8000";
+const AGENT_THROTTLE_MS = 1500;
 
 /* ----------------- API types ----------------- */
 type DatasetInfo = {
@@ -68,6 +69,25 @@ function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
     chains.push(chain);
   }
   return chains;
+}
+function blockToModel(b: BlocklyBlock): { type: string; fields: Record<string, unknown> } {
+  const fields: Record<string, unknown> = {};
+  for (const input of b.inputList || []) {
+    for (const field of input.fieldRow || []) {
+      const name = (field as any).name as string | undefined;
+      if (!name) continue;
+      const val = (field as any).getValue?.() ?? (field as any).getText?.();
+      fields[name] = val;
+    }
+  }
+  return { type: b.type, fields };
+}
+function workspaceToAnalyzePayload(ws: WorkspaceSvg, clientSignature?: string) {
+  const chains = getTopChains(ws).map((chain) => ({
+    top_block_type: chain[0]?.type ?? null,
+    blocks: chain.map(blockToModel),
+  }));
+  return clientSignature ? { chains, client_signature: clientSignature } : { chains };
 }
 const hasType = (chain: BlocklyBlock[], type: string) =>
   chain.some((b) => b.type === type);
@@ -151,12 +171,18 @@ export default function Module1Page() {
   const datasetKeyRef = useRef<string | null>(null);
   const dsInfoRef = useRef<DatasetInfo | null>(null);
   const sampleRef = useRef<SampleResponse | null>(null);
+  const clientSignatureRef = useRef<string>("");
 
   // Debounce
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tokenRef = useRef(0);
   const lastSigRef = useRef<string>("");
   const lastSampleSigRef = useRef<string>("");
+  const lastAnalyzerSigRef = useRef<string>("");
+  const analyzerTokenRef = useRef<number>(0);
+  const lastAgentCallAtRef = useRef<number>(0);
+  const pendingAgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAgentPayloadRef = useRef<string | null>(null);
 
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
   const lastChecklistRef = useRef<StageChecklistItem[] | null>(null);
@@ -188,6 +214,20 @@ export default function Module1Page() {
     }
 
     loadDatasets();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let id = window.localStorage.getItem("vb_client_signature");
+    if (!id) {
+      const rand =
+        typeof window.crypto?.randomUUID === "function"
+          ? window.crypto.randomUUID()
+          : `vb_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      id = rand;
+      window.localStorage.setItem("vb_client_signature", id);
+    }
+    clientSignatureRef.current = id;
   }, []);
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
@@ -266,6 +306,15 @@ export default function Module1Page() {
     }
   }
 
+  function setAgentCard(lines: string[]) {
+    setLogs((prev) => {
+      const filtered = prev.filter(
+        (item) => !(item.kind === "card" && item.title === "Agent")
+      );
+      return [{ kind: "card", title: "Agent", lines }, ...filtered];
+    });
+  }
+
   /* ---------- Inject Blockly ---------- */
   useEffect(() => {
     if (!blocklyDivRef.current) return;
@@ -300,7 +349,7 @@ export default function Module1Page() {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         instantFeedback();
-      }, 250);
+      }, 100);
 
       // refresh toolbox glow after changes / category switches
       setTimeout(() => {
@@ -310,6 +359,9 @@ export default function Module1Page() {
     ws.addChangeListener(onChange);
 
     setCheckItems(computeChecklist(ws));
+    setTimeout(() => {
+      instantFeedback();
+    }, 0);
 
     return () => {
       window.removeEventListener("vb:blockInfo", onInfo as any);
@@ -512,6 +564,21 @@ export default function Module1Page() {
 
     // Some blocks exist but order is off
     if (wrongKeys.length > 0) {
+      const wrongKey = wrongKeys[0];
+      const wrongNice = FRIENDLY_NAMES[wrongKey] ?? "that block";
+      const wrongIdx = missionOrder.indexOf(wrongKey as (typeof missionOrder)[number]);
+      const prevKey = wrongIdx > 0 ? missionOrder[wrongIdx - 1] : null;
+      const prevNice = prevKey ? FRIENDLY_NAMES[prevKey] ?? "the previous step" : null;
+
+      if (prevNice) {
+        const line = pickOne([
+          `${wrongNice} needs to come after ${prevNice}. Try moving it below so the order makes sense.`,
+          `I see ${wrongNice} before ${prevNice}. Swap them so the chain reads in order.`,
+        ]);
+        setBaymaxState(line, "warning", true);
+        return;
+      }
+
       const line = pickOne([
         "You’ve got some good blocks in there, but the order is a bit jumbled. Keep everything hanging in one straight chain under “use dataset”.",
         "Nice start! Try putting all the info and image blocks directly under the dataset block, top to bottom.",
@@ -700,6 +767,82 @@ export default function Module1Page() {
     if (!ws) return;
 
     const chains = getTopChains(ws);
+    // Fire-and-forget analyzer call (no UI layout changes)
+    try {
+      const payload = workspaceToAnalyzePayload(ws, clientSignatureRef.current || undefined);
+      const analyzerSig = JSON.stringify(payload);
+      if (analyzerSig !== lastAnalyzerSigRef.current) {
+        lastAnalyzerSigRef.current = analyzerSig;
+        pendingAgentPayloadRef.current = analyzerSig;
+
+        const fireAgentRequest = (payloadStr: string) => {
+          const myAnalyzerToken = ++analyzerTokenRef.current;
+          lastAgentCallAtRef.current = Date.now();
+          setAgentCard(["Thinking…"]);
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+          fetch(`${API_BASE}/analyze/module1/agent`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadStr,
+            signal: controller.signal,
+          })
+            .then(async (res) => {
+              if (res.ok) return res.json();
+              const text = await res.text().catch(() => "");
+              return { __error: true, status: res.status, text } as const;
+            })
+            .then((data) => {
+              if (myAnalyzerToken !== analyzerTokenRef.current) return;
+              if ((data as any)?.__error) {
+                const status = (data as any).status;
+                if (status === 429) {
+                  setAgentCard(["Rate limited. Try again in a moment."]);
+                } else {
+                  setAgentCard(["Agent error. Try again soon."]);
+                }
+                return;
+              }
+              const nextText = String(data?.agent_text || "").trim();
+              if (!nextText) {
+                setAgentCard(["Hint unavailable right now."]);
+                return;
+              }
+              const lines = nextText
+                .split(/\r?\n/)
+                .map((ln) => ln.trim())
+                .filter((ln) => ln.length > 0);
+              setAgentCard(lines);
+            })
+            .catch(() => {
+              if (myAnalyzerToken !== analyzerTokenRef.current) return;
+              setAgentCard(["Hint unavailable right now."]);
+            })
+            .finally(() => clearTimeout(timeoutId));
+        };
+
+        const now = Date.now();
+        const elapsed = now - lastAgentCallAtRef.current;
+        if (elapsed >= AGENT_THROTTLE_MS && !pendingAgentTimerRef.current) {
+          fireAgentRequest(analyzerSig);
+        } else if (!pendingAgentTimerRef.current) {
+          const wait = Math.max(AGENT_THROTTLE_MS - elapsed, 0);
+          pendingAgentTimerRef.current = setTimeout(() => {
+            pendingAgentTimerRef.current = null;
+            const latest = pendingAgentPayloadRef.current;
+            if (latest) {
+              fireAgentRequest(latest);
+            }
+          }, wait);
+        }
+      }
+    } catch {
+      setAgentCard(["Hint unavailable right now."]);
+      // ignore analyzer errors
+    }
+
     const dsChain = chains.find((ch) => hasType(ch, "dataset.select"));
 
     // dataset key from that chain

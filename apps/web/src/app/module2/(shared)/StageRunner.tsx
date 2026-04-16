@@ -23,7 +23,14 @@ import {
   type OpSpec,
 } from "@/data/module2Stages";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://127.0.0.1:8000";
+
+const STAGE1_REQUIRED = [
+  "m2.to_grayscale",
+  "m2.brightness_contrast",
+  "m2.blur_sharpen",
+];
+const STAGE1_ROUNDS = [...STAGE1_REQUIRED];
 
 /* ----------------- HTTP helper ----------------- */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -183,6 +190,11 @@ function findFirstPipelineTop(ws: WorkspaceSvg): BlocklyBlock | null {
   return null;
 }
 
+function findBlockByType(ws: WorkspaceSvg, type: string): BlocklyBlock | null {
+  const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
+  return blocks.find((b) => b.type === type) || null;
+}
+
 // For dataset-chain inspection (like Module 1)
 function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
   const tops = ws.getTopBlocks(true) as BlocklyBlock[];
@@ -218,10 +230,11 @@ function pickLine(options: string[], key: string): string {
   return options[idx];
 }
 
+
 /* ----------------- Stage target ops helper ----------------- */
 /**
  * Build the ops used to generate the TARGET image.
- * For Stage 3 we force a true 150×150 resize AND 150×150 pad
+ * For Stage 2/3 we force a true 150×150 resize AND 150×150 pad
  * so the visual goal always shows a clean square frame.
  */
 function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
@@ -230,7 +243,7 @@ function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
   const stageKey = String(stage.id);
   const base = stage.targetOps.map((op) => ({ ...(op as any) })) as OpSpec[];
 
-  if (stageKey === "3") {
+  if (stageKey === "2" || stageKey === "3") {
     let hasResize = false;
     let hasPad = false;
 
@@ -368,6 +381,14 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
   const lastChecklistRef = useRef<StageChecklistItem[] | null>(null);
 
+  const [stage1MissingBlock, setStage1MissingBlock] = useState<string | null>(null);
+  const [stage1Round, setStage1Round] = useState(0);
+  const [stage1PassedRounds, setStage1PassedRounds] = useState(0);
+  const stage1ResettingRef = useRef(false);
+  const stage1WasOkRef = useRef(false);
+  const stage1RoundRef = useRef(0);
+  const stage1MissingRef = useRef<string | null>(null);
+
   // separate logs for dataset vs pipeline so we can merge them cleanly
   const datasetLogsRef = useRef<LogItem[]>([]);
   const pipelineLogsRef = useRef<LogItem[]>([]);
@@ -496,6 +517,12 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     setLogs([]);
     dsInfoRef.current = null;
     sampleRef.current = null;
+    setStage1MissingBlock(null);
+    setStage1Round(0);
+    setStage1PassedRounds(0);
+    stage1WasOkRef.current = false;
+    stage1RoundRef.current = 0;
+    stage1MissingRef.current = null;
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
@@ -525,6 +552,15 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       if (next && smp.previousConnection) {
         next.connect(smp.previousConnection);
       }
+
+      if (String(stage.id) === "1") {
+        setupStage1Puzzle(ws, STAGE1_ROUNDS[0]);
+        setStage1Round(0);
+        setStage1PassedRounds(0);
+        stage1WasOkRef.current = false;
+        stage1RoundRef.current = 0;
+        stage1MissingRef.current = STAGE1_ROUNDS[0];
+      }
     } else {
       const ds = ws.newBlock("dataset.select");
       ds.initSvg();
@@ -548,6 +584,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       setTimeout(async () => {
         if (!workspaceRef.current || !stage) return;
         const wsNow = workspaceRef.current;
+        if (stage1ResettingRef.current) return;
 
         // Dataset + sample + split + stats (instant)
         await instantDatasetFeedback(wsNow);
@@ -561,6 +598,26 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         setCheckItems(items);
         const prev = lastChecklistRef.current || undefined;
         lastChecklistRef.current = items;
+
+        if (String(stage.id) === "1" && !stage1ResettingRef.current) {
+          const allOk = items.every((i) => i.state === "ok");
+          const hasActivePuzzle = !!stage1MissingRef.current;
+
+          if (hasActivePuzzle) {
+            if (allOk) {
+              setStage1PassedRounds(stage1RoundRef.current + 1);
+              if (stage1RoundRef.current === STAGE1_ROUNDS.length - 1) {
+                setStage1MissingBlock(null);
+                stage1MissingRef.current = null;
+              }
+            } else {
+              setStage1PassedRounds(stage1RoundRef.current);
+            }
+          }
+
+          stage1WasOkRef.current = allOk;
+        }
+
         updateBaymaxFromChecklist(stage, items, prev);
         updateToolboxGlow();
       }, 200);
@@ -582,6 +639,83 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   }, [stageId]);
 
   /* ---------- dataset/sample helpers ---------- */
+
+  function setupStage1Puzzle(ws: WorkspaceSvg, missingType: string) {
+    stage1ResettingRef.current = true;
+
+    (Blockly as any).Events.disable();
+    try {
+      // Clear the workspace and rebuild a clean chain for the puzzle.
+      ws.clear();
+
+      const ds = ws.newBlock("dataset.select");
+      ds.initSvg();
+      ds.render();
+
+      const smp = ws.newBlock("dataset.sample_image");
+      smp.initSvg();
+      smp.render();
+
+      const next = (ds as any).nextConnection;
+      if (next && smp.previousConnection) {
+        next.connect(smp.previousConnection);
+      }
+
+      const sampleBlock = smp;
+
+      const present = STAGE1_REQUIRED.filter((t) => t !== missingType);
+      const orderedPresent = STAGE1_REQUIRED.filter((t) => present.includes(t));
+
+      let prev: BlocklyBlock | null = sampleBlock;
+      for (const t of orderedPresent) {
+        const blk = ws.newBlock(t);
+        blk.initSvg();
+        blk.render();
+        if (prev?.nextConnection && blk.previousConnection) {
+          prev.nextConnection.connect(blk.previousConnection);
+        }
+        prev = blk;
+      }
+
+      setStage1MissingBlock(missingType);
+      stage1MissingRef.current = missingType;
+      stage1WasOkRef.current = false;
+    } finally {
+      (Blockly as any).Events.enable();
+      stage1ResettingRef.current = false;
+      setTimeout(() => {
+        if (!stage) return;
+        const items = computeChecklist(ws, stage);
+        setCheckItems(items);
+        const prev = lastChecklistRef.current || undefined;
+        lastChecklistRef.current = items;
+        updateBaymaxFromChecklist(stage, items, prev);
+        updateToolboxGlow();
+      }, 0);
+    }
+  }
+
+  function goStage1NextTest() {
+    if (!stage || String(stage.id) !== "1") return;
+    const ws = workspaceRef.current;
+    if (!ws) return;
+
+    const currentSolved = checkItems.length > 0 && checkItems.every((i) => i.state === "ok");
+    if (!currentSolved || !stage1MissingRef.current) return;
+
+    const nextRound = stage1RoundRef.current + 1;
+    if (nextRound < STAGE1_ROUNDS.length) {
+      setStage1Round(nextRound);
+      stage1RoundRef.current = nextRound;
+      setStage1PassedRounds(nextRound);
+      setupStage1Puzzle(ws, STAGE1_ROUNDS[nextRound]);
+      return;
+    }
+
+    setStage1PassedRounds(STAGE1_ROUNDS.length);
+    setStage1MissingBlock(null);
+    stage1MissingRef.current = null;
+  }
 
   function ensureDatasetKey(ws: WorkspaceSvg) {
     const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
@@ -939,7 +1073,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       expected.forEach((t) => present.set(t, connectedOrder.includes(t)));
 
       const orderOK = new Map<string, boolean>();
-      if (expected.length > 0) {
+      if (expected.length > 0 && String(s.id) !== "1") {
         let pos = -1;
         for (const t of expected) {
           const i = connectedOrder.indexOf(t);
@@ -947,6 +1081,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           orderOK.set(t, ok);
           if (ok) pos = i;
         }
+      } else if (String(s.id) === "1") {
+        expected.forEach((t) => orderOK.set(t, true));
       }
 
       (s.requiredBlocks || []).forEach((t) => {
@@ -1063,8 +1199,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     const stageKey = String(s.id);
     const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
 
-    // Stage 2: gently warn about very strong edits
-    if (stageKey === "2") {
+    // Stage 1: gently warn about very strong edits
+    if (stageKey === "1") {
       for (const b of allBlocks) {
         if (b.type === "m2.brightness_contrast") {
           const B = Number(b.getFieldValue("B") || 0);
@@ -1083,8 +1219,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }
     }
 
-    // Stages 3 & 4: resize + pad present but not exactly 150×150 (pipeline)
-    if (stageKey === "3" || stageKey === "4") {
+    // Stages 2 & 3: resize + pad present but not exactly 150×150 (pipeline)
+    if (stageKey === "2" || stageKey === "3") {
       const top = findFirstPipelineTop(ws);
       if (top) {
         const resizeBlock = findBlockByTypeInChain(top, "m2.resize");
@@ -1104,7 +1240,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           }
         }
 
-        if (stageKey === "4") {
+        if (stageKey === "3") {
           const normBlock = findBlockByTypeInChain(top, "m2.normalize");
           if (normBlock) {
             const mode = (normBlock.getFieldValue("MODE") || "").toString();
@@ -1122,8 +1258,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }
     }
 
-    // Stage 5: resize + pad in loop body but not exactly 150×150
-    if (stageKey === "5") {
+    // Stage 4: resize + pad in loop body but not exactly 150×150
+    if (stageKey === "4") {
       const loopBlock =
         allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
@@ -1166,7 +1302,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
    *   “After X, I was expecting Y, but I see Z instead.”
    *
    * Used for the “the next step should be THIS block, not THAT block”
-   * behaviour (including Stage 4 with normalize).
+  * behaviour (including Stage 3 with normalize).
    */
   function pipelineNextStepHint(
     s: StageConfig,
@@ -1261,28 +1397,28 @@ function updateBaymaxFromChecklist(
   if (wrong.length > 0) {
     // For pipeline stages 1–4, we want the top-to-bottom
     // "after this block should be THAT block" style hints.
-    if (s.type === "pipeline" && ["1", "2", "3", "4"].includes(stageKey)) {
+    if (s.type === "pipeline" && ["1", "2", "3"].includes(stageKey)) {
       // Special param hints first: 150×150 and normalize-mode for 3 & 4
       if (
-        (stageKey === "3" || stageKey === "4") &&
+        (stageKey === "2" || stageKey === "3") &&
         missing.length === 0 &&
         hints.resizePadAlmost150
       ) {
-        if (stageKey === "4") {
+        if (stageKey === "3") {
           const lines = [
             "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
             "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
             "Structure looks good. The next step is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
           ];
           setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-params-150-stage4"),
+            pickLine(lines, stageKey + "-wrong-params-150-stage3"),
             "warning",
             true
           );
           return;
         }
 
-        // Stage 3
+        // Stage 2
         const lines = [
           "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
           "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
@@ -1296,7 +1432,7 @@ function updateBaymaxFromChecklist(
         return;
       }
 
-      if (stageKey === "4" && missing.length === 0 && hints.normalizeModeNot01) {
+      if (stageKey === "3" && missing.length === 0 && hints.normalizeModeNot01) {
         const lines = [
           "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
           "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
@@ -1320,10 +1456,10 @@ function updateBaymaxFromChecklist(
       // to the generic wrong-place messages below.
     }
 
-    // 🔹 NEW: Stage 5 – loop body has resize/pad but not 150×150
+    // 🔹 NEW: Stage 4 – loop body has resize/pad but not 150×150
     if (
       s.type === "loop_export" &&
-      stageKey === "5" &&
+      stageKey === "4" &&
       missing.length === 0 &&
       hints.resizePadAlmost150
     ) {
@@ -1340,7 +1476,7 @@ function updateBaymaxFromChecklist(
       return;
     }
 
-    // Loop/export stage (Stage 5) or generic fallback
+    // Loop/export stage (Stage 4) or generic fallback
     const lines =
       s.type === "loop_export"
         ? [
@@ -1366,7 +1502,7 @@ function updateBaymaxFromChecklist(
   /* ---------- Missing blocks ---------- */
   if (missing.length > 0) {
     if (s.type === "loop_export") {
-      // Stage 5 / loop-export style hints
+      // Stage 4 / loop-export style hints
       if (loopItem?.state === "missing") {
         const lines = [
           "For automation we need a loop first. Add the loop block so your preprocessing recipe can run over many images instead of just one.",
@@ -1396,7 +1532,7 @@ function updateBaymaxFromChecklist(
 
       const lines = [
         "For this mission we want the whole preprocessing recipe running inside the loop, then a final step after it that saves everything as a new dataset. Check that all the key steps made it into the loop body.",
-        "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–4 pipeline.",
+            "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–3 pipeline.",
         "We still need your full preprocessing recipe inside the loop, and a single export block after the loop that writes out the processed dataset.",
       ];
       setBaymaxState(
@@ -1407,11 +1543,26 @@ function updateBaymaxFromChecklist(
       return;
     }
 
+    if (stageKey === "1" && stage1MissingBlock) {
+      const missingLabel = labelForType(stage1MissingBlock);
+      const round = Math.min(stage1Round + 1, STAGE1_ROUNDS.length);
+      const lines = [
+        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: two blocks are already placed. Add the missing one in the correct order.`,
+        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: your chain is almost complete. Add ${missingLabel} in the right spot.`,
+        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: only one block is missing. Use the toolbox glow, then place ${missingLabel} correctly.`,
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + round),
+        "hint",
+        true
+      );
+      return;
+    }
     if (stageKey === "1") {
       const lines = [
-        "This stage is about stripping away color so we only care about light and dark. Make sure your chain includes a grayscale step after the sample image.",
-        "We’re teaching the model to ignore color here. Look for the block that converts to grayscale and wire it in near the top of your chain.",
-        "Somewhere after the sample image we’re expecting a block that collapses color into brightness. Add that in to complete this mission.",
+        "This stage starts by stripping away color, then tidying the image. Make sure you have a grayscale step plus brightness/contrast and blur/sharpen cleanup blocks in your chain.",
+        "We’re teaching the model to ignore color and reduce noise. Add grayscale, then include a brightness/contrast tweak and a blur/sharpen step.",
+        "Somewhere after the sample image we’re expecting grayscale and two cleanup blocks (light levels + blur/sharpen). Add those in to complete this mission.",
       ];
       setBaymaxState(
         pickLine(lines, stageKey + "-missing-" + missing.length),
@@ -1419,17 +1570,6 @@ function updateBaymaxFromChecklist(
         true
       );
     } else if (stageKey === "2") {
-      const lines = [
-        "Here we’re doing gentle cleanup: brightness/contrast and maybe smoothing or sharpening. Check that you have at least one lighting tweak and one detail/blur tweak in the chain.",
-        "Stage 2 wants tidying blocks: something that adjusts light levels and something that smooths or sharpens edges. Add them after any grayscale step.",
-        "Think of this as making the image easier to read: small brightness/contrast and blur/sharpen steps should both appear in this mission’s chain.",
-      ];
-      setBaymaxState(
-        pickLine(lines, stageKey + "-missing-" + missing.length),
-        "hint",
-        true
-      );
-    } else if (stageKey === "3") {
       const lines = [
         "We’re aiming for a clean 150 × 150 landing pad. Make sure the resize step really makes the image 150 × 150, and the padding step uses the same size.",
         "This mission is all about consistent framing. Check that you both resize to 150×150 and pad to 150×150 so every image lands in the same square.",
@@ -1440,30 +1580,27 @@ function updateBaymaxFromChecklist(
         "hint",
         true
       );
-    } else if (stageKey === "4") {
-      // Stage 4 also uses the “top-to-bottom next step” logic
+    } else if (stageKey === "3") {
       const seqLine = pipelineNextStepHint(s, items);
       if (seqLine) {
         setBaymaxState(seqLine, "hint", true);
         return;
       }
-
-      // Fallback if we somehow can't compute a sequence hint
       const lines = [
         "The goal now is to get pixel values into a nice, consistent numeric range. Look for the normalize step and place it toward the end of the chain.",
         "We’re not changing how the image looks, just how the numbers are scaled. Add the normalization block near the bottom of your preprocessing recipe.",
-        "Stage 4 needs a block that rescales pixel values. For this mission we’re focusing on the 0–1 mode so values end up between 0 and 1.",
+        "Stage 3 needs a block that rescales pixel values. For this mission we’re focusing on the 0–1 mode so values end up between 0 and 1.",
       ];
       setBaymaxState(
         pickLine(lines, stageKey + "-missing-" + missing.length),
         "hint",
         true
       );
-    } else if (stageKey === "5") {
+    } else if (stageKey === "4") {
       const lines = [
-        "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–4 pipeline, and there should be a save step after the loop.",
+        "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–3 pipeline, and there should be a save step after the loop.",
         "We’re almost in production mode. Make sure your loop actually applies the full recipe, and that the export block is ready to write out the new dataset.",
-        "Stage 5 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
+        "Stage 4 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
       ];
       setBaymaxState(
         pickLine(lines, stageKey + "-missing-" + missing.length),
@@ -1498,10 +1635,10 @@ function updateBaymaxFromChecklist(
 
   /* ---------- All checklist items structurally OK ---------- */
   if (done === items.length && items.length > 0) {
-    // Stage 2: gentle nudge about extreme values
-    if (stageKey === "2" && (hints.extremeBC || hints.extremeBlurSharp)) {
+    // Stage 1: gentle nudge about extreme values
+    if (stageKey === "1" && (hints.extremeBC || hints.extremeBlurSharp)) {
       const lines = [
-        "Your Stage 2 pipeline is structurally correct, but those brightness/contrast or blur/sharpen values are pretty strong. For preprocessing we usually prefer gentle nudges. Try smaller numbers so the images don’t look over-edited.",
+        "Your Stage 1 pipeline is structurally correct, but those brightness/contrast or blur/sharpen values are pretty strong. For preprocessing we usually prefer gentle nudges. Try smaller numbers so the images don’t look over-edited.",
         "Mission complete, with one optimization note: tone and blur settings work best when they’re subtle. Try dialing the sliders back a bit and watch how the preview changes.",
         "You’ve passed this stage, but I’d recommend softening the brightness/contrast or blur/sharpen parameters. Think ‘cleanup’, not ‘dramatic filter’.",
       ];
@@ -1524,18 +1661,18 @@ function updateBaymaxFromChecklist(
         "success",
         false
       );
-    } else if (stageKey === "3") {
+    } else if (stageKey === "2") {
       const lines = [
         "Perfect 150 × 150 landing pad! Your resize and padding now work together so every image ends up in the same square frame.",
         "Your framing looks great: every sample should now land in a clean 150×150 window, just like the target.",
         "Nice work! Your resize and pad combo lock images into the exact square shape this stage is aiming for.",
       ];
       setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
-    } else if (stageKey === "4") {
+    } else if (stageKey === "3") {
       const lines = [
         "Great, your normalization step is in the right place and mode. Pixel values should now live in a stable 0–1 range for this stage.",
         "Numbers under control: your normalize block and its 0–1 mode give the model a calm, predictable input range.",
-        "Stage 4 complete: your pipeline now ends with a clean normalization step, putting pixel values in the 0–1 range we wanted to practice.",
+        "Stage 3 complete: your pipeline now ends with a clean normalization step, putting pixel values in the 0–1 range we wanted to practice.",
       ];
       setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
     } else {
@@ -1572,6 +1709,7 @@ function updateBaymaxFromChecklist(
     setBaymaxTyping(true);
 
     try {
+      const stageKey = String(stage.id);
       const ws = workspaceRef.current;
       ensureDatasetKey(ws);
       await ensureSample(ws);
@@ -1612,9 +1750,16 @@ function updateBaymaxFromChecklist(
           const allOk = itemsNow.every((i) => i.state === "ok");
           ok = ok && allOk;
 
+          if (stageKey === "1" && (stage1PassedRounds < STAGE1_ROUNDS.length || stage1MissingBlock)) {
+            ok = false;
+            lines.push(
+              "• Stage 1 has three mini-tests. Complete all three puzzle rounds before submitting."
+            );
+          }
+
           if (!allOk) {
             lines.push(
-              "• Some preprocessing steps are missing, out of order, or have settings that don’t match this stage’s goal. Compare your output to the target image and follow Baymax’s hints. For example, stages that resize and pad want both at 150×150, and Stage 4 wants normalize in the 0–1 mode."
+              "• Some preprocessing steps are missing, out of order, or have settings that don’t match this stage’s goal. Compare your output to the target image and follow Baymax’s hints. For example, stages that resize and pad want both at 150×150, and Stage 3 wants normalize in the 0–1 mode."
             );
           }
         }
@@ -1697,8 +1842,6 @@ function updateBaymaxFromChecklist(
         }
       }
 
-      const stageKey = String(stage.id);
-
       if (ok) {
         setSubmitSuccess(true);
 
@@ -1708,22 +1851,17 @@ function updateBaymaxFromChecklist(
             "✓ You wrapped the preprocessing steps inside a loop and exported a new dataset. This is exactly how real ML pipelines get their data ready.",
           ]);
         } else if (stageKey === "1") {
-          setSubmitTitle("Stage 1 Complete - Seeing in grayscale");
+          setSubmitTitle("Stage 1 Complete - Puzzle mastery");
           setSubmitLines([
-            "✓ You built a pipeline that reduces the image to light and dark while keeping the structure clear. Great base step for later stages.",
+            "✓ You solved all three missing-block puzzles in the correct order.",
           ]);
         } else if (stageKey === "2") {
-          setSubmitTitle("Stage 2 Complete - Clean up the signal");
-          setSubmitLines([
-            "✓ You added gentle lighting and detail tweaks so images are clearer without being over-edited.",
-          ]);
-        } else if (stageKey === "3") {
-          setSubmitTitle("Stage 3 Complete - Frame locked in");
+          setSubmitTitle("Stage 2 Complete - Frame locked in");
           setSubmitLines([
             "✓ Your pipeline now shapes images into a consistent square space without weird stretching.",
           ]);
-        } else if (stageKey === "4") {
-          setSubmitTitle("Stage 4 Complete - Numbers under control");
+        } else if (stageKey === "3") {
+          setSubmitTitle("Stage 3 Complete - Numbers under control");
           setSubmitLines([
             "✓ You normalized pixel values into a stable range, which helps training behave nicely later.",
           ]);
@@ -1763,12 +1901,15 @@ function updateBaymaxFromChecklist(
         if (stage.type === "loop_export") {
           failLine =
             "You’re close to a full automation pipeline. Make sure the loop body looks like a mini preprocessing chain with the same 150×150 frame as before, and that an export dataset block sits right after the loop to save the results.";
-        } else if (stageKey === "3") {
+        } else if (stageKey === "2") {
           failLine =
             "You’re not far off. You’re using the right kinds of blocks—now match the exact frame by setting both resize and pad to 150 × 150, then compare your output to the target image.";
-        } else if (stageKey === "4") {
+        } else if (stageKey === "3") {
           failLine =
             "You’re close. Double-check your resize/pad values (150 × 150) and your normalize block: for this stage, switch its mode to 0–1 so values end up between 0 and 1.";
+        } else if (stageKey === "1" && stage1MissingBlock) {
+          failLine =
+            "Stage 1 is a 3-round puzzle. Add the missing block in each round in the correct order before submitting.";
         } else {
           failLine =
             "You’re not far off. Compare your output with the target image on the right and use my hints to decide whether you need to add a block, change the order, or tweak a parameter.";
@@ -1820,15 +1961,30 @@ function updateBaymaxFromChecklist(
     return { total, done };
   }, [stage, checkItems]);
 
+  const isStage1 = String(stage.id) === "1";
+  const stage1CurrentSolved =
+    isStage1 &&
+    !!stage1MissingBlock &&
+    checkItems.length > 0 &&
+    checkItems.every((i) => i.state === "ok");
+  const stage1CanLoadNext =
+    isStage1 &&
+    stage1CurrentSolved &&
+    stage1Round < STAGE1_ROUNDS.length - 1;
+  const stage1AllTestsDone =
+    isStage1 &&
+    stage1PassedRounds >= STAGE1_ROUNDS.length &&
+    !stage1MissingBlock;
+
   /* ---------- UI ---------- */
 
   if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
 
   return (
-    <div className="h-screen w-screen bg-[#E3E7F5] overflow-hidden">
+    <div className="h-[100dvh] w-full bg-[#E3E7F5] overflow-hidden">
       {/* Top nav – styled like Module 1’s, but for Module 2 */}
       <header className="fixed top-0 left-0 right-0 z-20 backdrop-blur-xl bg-white/70 border-b border-white/60 shadow-sm">
-        <div className="max-w-[1400px] mx-auto px-5 h-16 flex items-center justify-between">
+        <div className="max-w-[1400px] mx-auto px-4 lg:px-5 h-14 flex items-center justify-between">
           <div className="flex items-baseline gap-2">
             <span className="text-lg font-semibold text-slate-900">VisionBlocks</span>
             <span className="text-xs text-slate-500">
@@ -1898,10 +2054,9 @@ function updateBaymaxFromChecklist(
       </header>
 
       {/* Main layout (like Module 1) */}
-      <div className="pt-20 h-full">
+      <div className="pt-16 h-full">
         <div
-          className="max-w-[1400px] mx-auto px-4 h-[calc(100vh-5rem)] grid gap-4"
-          style={{ gridTemplateColumns: `minmax(0, 1.9fr) minmax(0, 1.2fr)` }}
+          className="max-w-[1400px] mx-auto px-3 lg:px-4 h-[calc(100dvh-4rem)] grid gap-3 lg:gap-4 grid-cols-1 xl:grid-cols-[minmax(0,1.8fr)_minmax(0,1.15fr)]"
         >
           {/* LEFT: Blockly workspace */}
           <div className="h-full min-h-0 rounded-3xl bg-white shadow-[0_22px_60px_rgba(15,23,42,0.25)] border border-white/70 overflow-hidden">
@@ -1909,8 +2064,8 @@ function updateBaymaxFromChecklist(
           </div>
 
           {/* RIGHT: Baymax + target + output */}
-          <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col">
-            <div className="flex flex-col min-h-0 px-4 py-4 gap-4">
+          <div className="h-full min-h-0 rounded-3xl border border-white/80 bg-gradient-to-b from-white/90 to-[#E0E5F4] shadow-[0_18px_45px_rgba(15,23,42,0.22)] flex flex-col overflow-hidden">
+            <div className="flex flex-col min-h-0 px-3 lg:px-4 py-3 gap-3 overflow-y-auto">
               {/* Top row: stage blocks chip + help button */}
               <div className="flex items-center justify-between mb-1">
                 <div
@@ -1943,6 +2098,61 @@ function updateBaymaxFromChecklist(
                 </button>
               </div>
 
+              {isStage1 && (
+                <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70 px-3 py-3">
+                  <div className="text-xs font-semibold text-sky-800 mb-2">
+                    Stage 1 Tests ({stage1PassedRounds}/{STAGE1_ROUNDS.length})
+                  </div>
+                  <div className="space-y-1.5 mb-3">
+                    {STAGE1_ROUNDS.map((blockType, idx) => {
+                      const done = idx < stage1PassedRounds;
+                      const current = !done && idx === stage1Round && !!stage1MissingBlock;
+                      const status = done ? "Done" : current ? "Current" : "Pending";
+                      const badgeClass = done
+                        ? "bg-emerald-100 text-emerald-700 border-emerald-300"
+                        : current
+                        ? "bg-amber-100 text-amber-700 border-amber-300"
+                        : "bg-slate-100 text-slate-600 border-slate-300";
+
+                      return (
+                        <div
+                          key={blockType}
+                          className="flex items-center justify-between rounded-lg border border-sky-100 bg-white/80 px-2.5 py-1.5"
+                        >
+                          <span className="text-xs text-slate-700">
+                            Test {idx + 1}: {labelForType(blockType)}
+                          </span>
+                          <span
+                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${badgeClass}`}
+                          >
+                            {status}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {!stage1AllTestsDone ? (
+                    <button
+                      onClick={goStage1NextTest}
+                      disabled={!stage1CanLoadNext}
+                      className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold border transition
+                        ${
+                          stage1CanLoadNext
+                            ? "border-sky-400 bg-white text-sky-700 hover:bg-sky-100"
+                            : "border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed"
+                        }`}
+                    >
+                      Next Test
+                    </button>
+                  ) : (
+                    <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 text-center">
+                      All 3 tests done. You can now press Submit &amp; Run.
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Baymax helper */}
               <div
                 className={`shrink-0 transition-transform ${
@@ -1967,7 +2177,7 @@ function updateBaymaxFromChecklist(
               )}
 
               {/* Output panel */}
-              <div className="flex-1 min-h-0">
+              <div className="flex-1 min-h-[220px]">
                 <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />
               </div>
 

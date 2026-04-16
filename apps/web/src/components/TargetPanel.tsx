@@ -20,7 +20,7 @@ export default function TargetPanel({
   return (
     <div
       className={`
-        rounded-2xl border px-3 py-3 md:px-4 md:py-4 ${card}
+        rounded-2xl border px-3 py-2.5 md:px-4 md:py-3 ${card}
         shadow-[0_14px_32px_rgba(15,23,42,0.16)]
       `}
     >
@@ -36,9 +36,9 @@ export default function TargetPanel({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mt-3">
+      <div className="grid grid-cols-2 gap-2.5 mt-2.5">
         <figure className="rounded-xl bg-white/80 border border-slate-200/80 p-2 shadow-sm">
-          <div className="aspect-square w-full overflow-hidden rounded-lg bg-slate-100 flex items-center justify-center">
+          <div className="aspect-[4/3] w-full overflow-hidden rounded-lg bg-slate-100 flex items-center justify-center">
             {targetSrc ? (
               <img
                 src={targetSrc}
@@ -55,7 +55,7 @@ export default function TargetPanel({
         </figure>
 
         <figure className="rounded-xl bg-white/80 border border-slate-200/80 p-2 shadow-sm">
-          <div className="aspect-square w-full overflow-hidden rounded-lg bg-slate-100 flex items-center justify-center">
+          <div className="aspect-[4/3] w-full overflow-hidden rounded-lg bg-slate-100 flex items-center justify-center">
             {currentSrc ? (
               <img
                 src={currentSrc}

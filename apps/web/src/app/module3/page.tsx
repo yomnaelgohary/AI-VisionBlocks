@@ -12,7 +12,7 @@ import InfoModal from "@/components/InfoModal";
 import MissionChecklistM3 from "@/components/MissionChecklistM3";
 import SubmissionModal from "@/components/SubmissionModal";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://127.0.0.1:8000";
 
 /* ---------- Types ---------- */
 type DatasetInfoResp = {

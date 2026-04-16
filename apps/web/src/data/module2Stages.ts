@@ -46,60 +46,37 @@ export type StageConfig =
 // ---------- Stages (new structure) ----------
 
 export const module2Stages: StageConfig[] = [
-  // STAGE 1 – Grayscale (unchanged)
+  // STAGE 1 – Grayscale + Cleanup (merged)
   {
     id: 1,
-    title: "Stage 1: Grayscale",
+    title: "Stage 1: Grayscale + Cleanup",
     type: "pipeline",
     intro: [
-      "Convert the image to grayscale to focus on shapes and brightness, not color.",
-      "This is useful when color does not help the model and only adds noise.",
+      "Convert the image to grayscale, then gently clean up brightness and detail.",
+      "This helps the model focus on shape without harsh lighting or noisy edges.",
     ],
     help: {
-      title: "What is Grayscale?",
+      title: "Why Grayscale and Cleanup?",
       text: `
-    A grayscale image removes all colors and keeps only brightness (how light or dark each pixel is).
-    Why would we do that?
+    Grayscale removes color and keeps only brightness, which makes shape and structure easier to see.
+    Then we do small cleanup steps so the image is clearer and less noisy:
 
-    • Many tasks rely on shape, outline, or texture—not color.
-    • Removing color makes the model focus on structure instead of distractions.
-    • It also reduces the input size, making everything faster.
+    • Brightness and contrast make important details pop.
+    • Blur or sharpen removes noise or clarifies edges.
 
-    Think of it like drawing with a pencil before painting, to get the structure right first.
+    The goal is not a dramatic filter, just a clean, readable image.
     `.trim(),
     },
-    requiredBlocks: ["m2.to_grayscale"],
-    expectedOrder: ["m2.to_grayscale"],
-    targetOps: [{ type: "to_grayscale" }],
-  },
-
-  // STAGE 2 – Brightness, Contrast, Blur & Sharpen
-  {
-    id: 2,
-    title: "Stage 2: Brightness, Contrast, Blur & Sharpen",
-    type: "pipeline",
-    intro: [
-      "Gently adjust brightness and contrast to make details clearer.",
-      "Use a small sharpen value to make edges pop, or a tiny blur to smooth noise.",
+    requiredBlocks: [
+      "m2.to_grayscale",
+      "m2.brightness_contrast",
+      "m2.blur_sharpen",
     ],
-    help: {
-      title: "Why Adjust Brightness, Contrast, and Sharpness?",
-      text: `
-    Real photos often have problems: dark areas, bright lamps, blurry edges, or random noise.
-    These small fixes help the model see the important parts more clearly.
-
-    • Brightness: makes the whole image lighter or darker.
-    • Contrast: increases the difference between light and dark areas.
-    • Sharpen: makes edges and details easier to see.
-    • Blur: gently smooths noisy or grainy areas.
-
-    The goal is not to dramatically change the image, but to make it clean and easy to understand,
-    just like wiping dust off a camera lens before taking a picture.
-    `.trim(),
-    },
-    // We build on Stage 1, then add brightness/contrast + blur/sharpen
-    requiredBlocks: ["m2.to_grayscale", "m2.brightness_contrast", "m2.blur_sharpen"],
-    expectedOrder: ["m2.to_grayscale", "m2.brightness_contrast", "m2.blur_sharpen"],
+    expectedOrder: [
+      "m2.to_grayscale",
+      "m2.brightness_contrast",
+      "m2.blur_sharpen",
+    ],
     targetOps: [
       { type: "to_grayscale" },
       { type: "brightness_contrast", b: 10, c: 10 },
@@ -107,10 +84,10 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 3 – Resize & Pad
+  // STAGE 2 – Resize & Pad
   {
-    id: 3,
-    title: "Stage 3: Resize & Pad",
+    id: 2,
+    title: "Stage 2: Resize & Pad",
     type: "pipeline",
     intro: [
       "Resize images so they share a consistent size while keeping aspect ratio.",
@@ -126,11 +103,11 @@ export const module2Stages: StageConfig[] = [
       (We keep the original shape so things don’t look stretched or squished.)
     • Pad: adds blank space around the image so it becomes a perfect square like 150×150.
 
-    Imagine placing many different photos into identical picture frames.  
+    Imagine placing many different photos into identical picture frames.
     Resizing makes them fit inside; padding fills the leftover space so the frame stays neat.
     `.trim(),
     },
-    // Build on Stage 2, then add resize + pad
+    // Build on Stage 1, then add resize + pad
     requiredBlocks: [
       "m2.to_grayscale",
       "m2.brightness_contrast",
@@ -156,10 +133,10 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 4 – Normalize
+  // STAGE 3 – Normalize
   {
-    id: 4,
-    title: "Stage 4: Normalize",
+    id: 3,
+    title: "Stage 3: Normalize",
     type: "pipeline",
     intro: [
       "Normalize pixel values into a small, consistent range such as 0–1.",
@@ -168,7 +145,7 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "Why Normalize Pixel Values?",
       text: `
-    Raw pixel values go from 0 to 255.  
+    Raw pixel values go from 0 to 255.
     Feeding these big numbers into a model can make learning uneven or unstable.
 
     Normalization rescales every pixel into a small, predictable range like 0–1. This helps because:
@@ -180,7 +157,7 @@ export const module2Stages: StageConfig[] = [
     It’s like converting all exam scores to a 0–1 scale before averaging them, everything becomes fair and stable.
     `.trim(),
     },
-    // Build on Stage 3, then add normalization at the end
+    // Build on Stage 2, then add normalization at the end
     requiredBlocks: [
       "m2.to_grayscale",
       "m2.brightness_contrast",
@@ -201,16 +178,18 @@ export const module2Stages: StageConfig[] = [
       { type: "to_grayscale" },
       { type: "brightness_contrast", b: 10, c: 10 },
       { type: "blur_sharpen", blur: 0, sharp: 1.0 },
+      // then resize towards 150 while keeping aspect ratio
       { type: "resize", mode: "size", w: 150, h: 256, keep: "TRUE" },
+      // and pad to exactly 150×150
       { type: "pad", w: 150, h: 150, mode: "constant" },
       { type: "normalize", mode: "zero_one" },
     ],
   },
 
-  // STAGE 5 – Loop & Export (same logic as old Stage 7, just new id and order)
+  // STAGE 4 – Loop & Export
   {
-    id: 5,
-    title: "Stage 5: Loop & Export",
+    id: 4,
+    title: "Stage 4: Loop & Export",
     type: "loop_export",
     intro: [
       "Put your whole preprocessing pipeline inside the loop block.",
@@ -247,9 +226,9 @@ export const module2Stages: StageConfig[] = [
     ],
     requireExportAfterLoop: true,
     targetOps: [
-  { type: "resize", mode: "size", w: 150, h: 150 },
-  { type: "pad", w: 150, h: 150, mode: "constant", r: 0, g: 0, b: 0 }
-]
+      { type: "resize", mode: "size", w: 150, h: 150 },
+      { type: "pad", w: 150, h: 150, mode: "constant", r: 0, g: 0, b: 0 },
+    ],
   },
 
   // BONUS – Edge Detection (unchanged)
