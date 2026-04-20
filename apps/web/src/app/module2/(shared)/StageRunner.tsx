@@ -30,7 +30,6 @@ const STAGE1_REQUIRED = [
   "m2.brightness_contrast",
   "m2.blur_sharpen",
 ];
-const STAGE1_ROUNDS = [...STAGE1_REQUIRED];
 
 /* ----------------- HTTP helper ----------------- */
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -78,6 +77,19 @@ type DatasetInfo = {
 };
 
 type SplitResp = { r_data_url: string; g_data_url: string; b_data_url: string };
+
+type AnalyzerBlock = { type: string; fields: Record<string, unknown> };
+type AnalyzerChain = { top_block_type: string | null; blocks: AnalyzerBlock[] };
+type AnalyzeAgentReq = {
+  chains: AnalyzerChain[];
+  client_signature?: string;
+};
+type AnalyzeAgentResp = {
+  analyzer: {
+    signature: string;
+  };
+  agent_text: string;
+};
 
 /* ----------------- Blockly → ops ----------------- */
 function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
@@ -205,6 +217,18 @@ function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
     chains.push(chain);
   }
   return chains;
+}
+
+function blockToAnalyzerModel(b: BlocklyBlock): AnalyzerBlock {
+  const fields: Record<string, unknown> = {};
+  for (const input of b.inputList || []) {
+    for (const field of input.fieldRow || []) {
+      const name = (field as any).name as string | undefined;
+      if (!name) continue;
+      fields[name] = (field as any).getValue?.() ?? (field as any).getText?.();
+    }
+  }
+  return { type: b.type, fields };
 }
 const hasType = (chain: BlocklyBlock[], type: string) =>
   chain.some((b) => b.type === type);
@@ -345,6 +369,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   );
   const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
   const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
+  const [aiAssistantText, setAiAssistantText] = useState<string>(
+    "LLM assistant is waiting for your Stage 1 edits..."
+  );
+  const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
 
   // Baymax bump animation
   const [baymaxBump, setBaymaxBump] = useState(false);
@@ -381,17 +409,12 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
   const lastChecklistRef = useRef<StageChecklistItem[] | null>(null);
 
-  const [stage1MissingBlock, setStage1MissingBlock] = useState<string | null>(null);
-  const [stage1Round, setStage1Round] = useState(0);
-  const [stage1PassedRounds, setStage1PassedRounds] = useState(0);
-  const stage1ResettingRef = useRef(false);
-  const stage1WasOkRef = useRef(false);
-  const stage1RoundRef = useRef(0);
-  const stage1MissingRef = useRef<string | null>(null);
-
   // separate logs for dataset vs pipeline so we can merge them cleanly
   const datasetLogsRef = useRef<LogItem[]>([]);
   const pipelineLogsRef = useRef<LogItem[]>([]);
+  const m2AgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const m2AgentTokenRef = useRef(0);
+  const m2AgentSigRef = useRef("");
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
   useEffect(() => {
@@ -500,6 +523,50 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     });
   }
 
+  function requestStage1AgentHintDebounced(ws: WorkspaceSvg) {
+    if (!stage || String(stage.id) !== "1") return;
+
+    if (m2AgentTimerRef.current) clearTimeout(m2AgentTimerRef.current);
+    m2AgentTimerRef.current = setTimeout(async () => {
+      const chains = getTopChains(ws).map((chain): AnalyzerChain => ({
+        top_block_type: chain[0]?.type || null,
+        blocks: chain.map((b) => blockToAnalyzerModel(b)),
+      }));
+
+      const payload: AnalyzeAgentReq = {
+        chains,
+        client_signature: "module2-stage1-live",
+      };
+
+      const sig = JSON.stringify(payload);
+      if (sig === m2AgentSigRef.current) return;
+      m2AgentSigRef.current = sig;
+      const myToken = ++m2AgentTokenRef.current;
+
+      try {
+        setAiAssistantLoading(true);
+        const resp = await fetchJSON<AnalyzeAgentResp>(`${API_BASE}/analyze/module2/agent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (myToken !== m2AgentTokenRef.current) return;
+        const text = (resp.agent_text || "").trim();
+        if (!text) return;
+        setAiAssistantText(text);
+      } catch (e: any) {
+        if (myToken !== m2AgentTokenRef.current) return;
+        const msg = (e?.message || "Request failed").toString();
+        setAiAssistantText(`LLM error: ${msg}`);
+      } finally {
+        if (myToken === m2AgentTokenRef.current) {
+          setAiAssistantLoading(false);
+        }
+      }
+    }, 450);
+  }
+
   /* ---------- Blockly inject + listeners ---------- */
   useEffect(() => {
     if (!stage || !blocklyDivRef.current) return;
@@ -517,12 +584,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     setLogs([]);
     dsInfoRef.current = null;
     sampleRef.current = null;
-    setStage1MissingBlock(null);
-    setStage1Round(0);
-    setStage1PassedRounds(0);
-    stage1WasOkRef.current = false;
-    stage1RoundRef.current = 0;
-    stage1MissingRef.current = null;
+    m2AgentSigRef.current = "";
+    setAiAssistantLoading(false);
+    setAiAssistantText("LLM assistant is waiting for your Stage 1 edits...");
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
@@ -553,14 +617,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         next.connect(smp.previousConnection);
       }
 
-      if (String(stage.id) === "1") {
-        setupStage1Puzzle(ws, STAGE1_ROUNDS[0]);
-        setStage1Round(0);
-        setStage1PassedRounds(0);
-        stage1WasOkRef.current = false;
-        stage1RoundRef.current = 0;
-        stage1MissingRef.current = STAGE1_ROUNDS[0];
-      }
     } else {
       const ds = ws.newBlock("dataset.select");
       ds.initSvg();
@@ -584,7 +640,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       setTimeout(async () => {
         if (!workspaceRef.current || !stage) return;
         const wsNow = workspaceRef.current;
-        if (stage1ResettingRef.current) return;
 
         // Dataset + sample + split + stats (instant)
         await instantDatasetFeedback(wsNow);
@@ -599,26 +654,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const prev = lastChecklistRef.current || undefined;
         lastChecklistRef.current = items;
 
-        if (String(stage.id) === "1" && !stage1ResettingRef.current) {
-          const allOk = items.every((i) => i.state === "ok");
-          const hasActivePuzzle = !!stage1MissingRef.current;
-
-          if (hasActivePuzzle) {
-            if (allOk) {
-              setStage1PassedRounds(stage1RoundRef.current + 1);
-              if (stage1RoundRef.current === STAGE1_ROUNDS.length - 1) {
-                setStage1MissingBlock(null);
-                stage1MissingRef.current = null;
-              }
-            } else {
-              setStage1PassedRounds(stage1RoundRef.current);
-            }
-          }
-
-          stage1WasOkRef.current = allOk;
-        }
-
         updateBaymaxFromChecklist(stage, items, prev);
+        requestStage1AgentHintDebounced(wsNow);
         updateToolboxGlow();
       }, 200);
     };
@@ -631,6 +668,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     updateBaymaxFromChecklist(stage, initialItems, undefined);
 
     return () => {
+      if (m2AgentTimerRef.current) clearTimeout(m2AgentTimerRef.current);
       window.removeEventListener("vb:blockInfo", onInfo as any);
       ws.removeChangeListener(onChange);
       ws.dispose();
@@ -639,83 +677,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   }, [stageId]);
 
   /* ---------- dataset/sample helpers ---------- */
-
-  function setupStage1Puzzle(ws: WorkspaceSvg, missingType: string) {
-    stage1ResettingRef.current = true;
-
-    (Blockly as any).Events.disable();
-    try {
-      // Clear the workspace and rebuild a clean chain for the puzzle.
-      ws.clear();
-
-      const ds = ws.newBlock("dataset.select");
-      ds.initSvg();
-      ds.render();
-
-      const smp = ws.newBlock("dataset.sample_image");
-      smp.initSvg();
-      smp.render();
-
-      const next = (ds as any).nextConnection;
-      if (next && smp.previousConnection) {
-        next.connect(smp.previousConnection);
-      }
-
-      const sampleBlock = smp;
-
-      const present = STAGE1_REQUIRED.filter((t) => t !== missingType);
-      const orderedPresent = STAGE1_REQUIRED.filter((t) => present.includes(t));
-
-      let prev: BlocklyBlock | null = sampleBlock;
-      for (const t of orderedPresent) {
-        const blk = ws.newBlock(t);
-        blk.initSvg();
-        blk.render();
-        if (prev?.nextConnection && blk.previousConnection) {
-          prev.nextConnection.connect(blk.previousConnection);
-        }
-        prev = blk;
-      }
-
-      setStage1MissingBlock(missingType);
-      stage1MissingRef.current = missingType;
-      stage1WasOkRef.current = false;
-    } finally {
-      (Blockly as any).Events.enable();
-      stage1ResettingRef.current = false;
-      setTimeout(() => {
-        if (!stage) return;
-        const items = computeChecklist(ws, stage);
-        setCheckItems(items);
-        const prev = lastChecklistRef.current || undefined;
-        lastChecklistRef.current = items;
-        updateBaymaxFromChecklist(stage, items, prev);
-        updateToolboxGlow();
-      }, 0);
-    }
-  }
-
-  function goStage1NextTest() {
-    if (!stage || String(stage.id) !== "1") return;
-    const ws = workspaceRef.current;
-    if (!ws) return;
-
-    const currentSolved = checkItems.length > 0 && checkItems.every((i) => i.state === "ok");
-    if (!currentSolved || !stage1MissingRef.current) return;
-
-    const nextRound = stage1RoundRef.current + 1;
-    if (nextRound < STAGE1_ROUNDS.length) {
-      setStage1Round(nextRound);
-      stage1RoundRef.current = nextRound;
-      setStage1PassedRounds(nextRound);
-      setupStage1Puzzle(ws, STAGE1_ROUNDS[nextRound]);
-      return;
-    }
-
-    setStage1PassedRounds(STAGE1_ROUNDS.length);
-    setStage1MissingBlock(null);
-    stage1MissingRef.current = null;
-  }
 
   function ensureDatasetKey(ws: WorkspaceSvg) {
     const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
@@ -1543,21 +1504,6 @@ function updateBaymaxFromChecklist(
       return;
     }
 
-    if (stageKey === "1" && stage1MissingBlock) {
-      const missingLabel = labelForType(stage1MissingBlock);
-      const round = Math.min(stage1Round + 1, STAGE1_ROUNDS.length);
-      const lines = [
-        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: two blocks are already placed. Add the missing one in the correct order.`,
-        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: your chain is almost complete. Add ${missingLabel} in the right spot.`,
-        `Puzzle ${round} of ${STAGE1_ROUNDS.length}: only one block is missing. Use the toolbox glow, then place ${missingLabel} correctly.`,
-      ];
-      setBaymaxState(
-        pickLine(lines, stageKey + "-missing-" + round),
-        "hint",
-        true
-      );
-      return;
-    }
     if (stageKey === "1") {
       const lines = [
         "This stage starts by stripping away color, then tidying the image. Make sure you have a grayscale step plus brightness/contrast and blur/sharpen cleanup blocks in your chain.",
@@ -1750,13 +1696,6 @@ function updateBaymaxFromChecklist(
           const allOk = itemsNow.every((i) => i.state === "ok");
           ok = ok && allOk;
 
-          if (stageKey === "1" && (stage1PassedRounds < STAGE1_ROUNDS.length || stage1MissingBlock)) {
-            ok = false;
-            lines.push(
-              "• Stage 1 has three mini-tests. Complete all three puzzle rounds before submitting."
-            );
-          }
-
           if (!allOk) {
             lines.push(
               "• Some preprocessing steps are missing, out of order, or have settings that don’t match this stage’s goal. Compare your output to the target image and follow Baymax’s hints. For example, stages that resize and pad want both at 150×150, and Stage 3 wants normalize in the 0–1 mode."
@@ -1851,10 +1790,8 @@ function updateBaymaxFromChecklist(
             "✓ You wrapped the preprocessing steps inside a loop and exported a new dataset. This is exactly how real ML pipelines get their data ready.",
           ]);
         } else if (stageKey === "1") {
-          setSubmitTitle("Stage 1 Complete - Puzzle mastery");
-          setSubmitLines([
-            "✓ You solved all three missing-block puzzles in the correct order.",
-          ]);
+          setSubmitTitle("Stage 1 Complete - Preprocessing chain ready");
+          setSubmitLines(["✓ Your grayscale and cleanup pipeline is in place."]);
         } else if (stageKey === "2") {
           setSubmitTitle("Stage 2 Complete - Frame locked in");
           setSubmitLines([
@@ -1907,9 +1844,9 @@ function updateBaymaxFromChecklist(
         } else if (stageKey === "3") {
           failLine =
             "You’re close. Double-check your resize/pad values (150 × 150) and your normalize block: for this stage, switch its mode to 0–1 so values end up between 0 and 1.";
-        } else if (stageKey === "1" && stage1MissingBlock) {
+        } else if (stageKey === "1") {
           failLine =
-            "Stage 1 is a 3-round puzzle. Add the missing block in each round in the correct order before submitting.";
+            "You’re close. Make sure the Stage 1 preprocessing chain is complete and in a sensible order before submitting.";
         } else {
           failLine =
             "You’re not far off. Compare your output with the target image on the right and use my hints to decide whether you need to add a block, change the order, or tweak a parameter.";
@@ -1960,21 +1897,6 @@ function updateBaymaxFromChecklist(
     const done = checkItems.filter((i) => i.state === "ok").length;
     return { total, done };
   }, [stage, checkItems]);
-
-  const isStage1 = String(stage.id) === "1";
-  const stage1CurrentSolved =
-    isStage1 &&
-    !!stage1MissingBlock &&
-    checkItems.length > 0 &&
-    checkItems.every((i) => i.state === "ok");
-  const stage1CanLoadNext =
-    isStage1 &&
-    stage1CurrentSolved &&
-    stage1Round < STAGE1_ROUNDS.length - 1;
-  const stage1AllTestsDone =
-    isStage1 &&
-    stage1PassedRounds >= STAGE1_ROUNDS.length &&
-    !stage1MissingBlock;
 
   /* ---------- UI ---------- */
 
@@ -2098,61 +2020,6 @@ function updateBaymaxFromChecklist(
                 </button>
               </div>
 
-              {isStage1 && (
-                <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70 px-3 py-3">
-                  <div className="text-xs font-semibold text-sky-800 mb-2">
-                    Stage 1 Tests ({stage1PassedRounds}/{STAGE1_ROUNDS.length})
-                  </div>
-                  <div className="space-y-1.5 mb-3">
-                    {STAGE1_ROUNDS.map((blockType, idx) => {
-                      const done = idx < stage1PassedRounds;
-                      const current = !done && idx === stage1Round && !!stage1MissingBlock;
-                      const status = done ? "Done" : current ? "Current" : "Pending";
-                      const badgeClass = done
-                        ? "bg-emerald-100 text-emerald-700 border-emerald-300"
-                        : current
-                        ? "bg-amber-100 text-amber-700 border-amber-300"
-                        : "bg-slate-100 text-slate-600 border-slate-300";
-
-                      return (
-                        <div
-                          key={blockType}
-                          className="flex items-center justify-between rounded-lg border border-sky-100 bg-white/80 px-2.5 py-1.5"
-                        >
-                          <span className="text-xs text-slate-700">
-                            Test {idx + 1}: {labelForType(blockType)}
-                          </span>
-                          <span
-                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${badgeClass}`}
-                          >
-                            {status}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {!stage1AllTestsDone ? (
-                    <button
-                      onClick={goStage1NextTest}
-                      disabled={!stage1CanLoadNext}
-                      className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold border transition
-                        ${
-                          stage1CanLoadNext
-                            ? "border-sky-400 bg-white text-sky-700 hover:bg-sky-100"
-                            : "border-slate-300 bg-slate-100 text-slate-400 cursor-not-allowed"
-                        }`}
-                    >
-                      Next Test
-                    </button>
-                  ) : (
-                    <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 text-center">
-                      All 3 tests done. You can now press Submit &amp; Run.
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* Baymax helper */}
               <div
                 className={`shrink-0 transition-transform ${
@@ -2166,6 +2033,23 @@ function updateBaymaxFromChecklist(
                   dark={false}
                 />
               </div>
+
+              {String(stage.id) === "1" && (
+                <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-fuchsia-200 bg-fuchsia-100 text-fuchsia-700">
+                      LLM
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-fuchsia-900/90">
+                    {aiAssistantText}
+                  </p>
+                  {aiAssistantLoading && (
+                    <div className="mt-2 text-[11px] text-fuchsia-600">Thinking...</div>
+                  )}
+                </div>
+              )}
 
               {/* Target vs current (pipeline stages only) */}
               {stage.type === "pipeline" && (
