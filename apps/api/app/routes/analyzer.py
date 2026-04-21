@@ -491,8 +491,8 @@ STAGE_REQUIREMENTS = [
         ],
     },
     {
-        "key": "stage4",
-        "label": "Stage 4: Loop & Export",
+        "key": "stage3",
+        "label": "Stage 3: Loop & Export",
         "type": "loop_export",
         "required": [
             "m2.to_grayscale",
@@ -529,6 +529,15 @@ M2_STAGE1_REQUIRED_ORDER = [
 ]
 
 M2_STAGE2_REQUIRED_ORDER = [
+    "m2.to_grayscale",
+    "m2.brightness_contrast",
+    "m2.blur_sharpen",
+    "m2.resize",
+    "m2.pad",
+    "m2.normalize",
+]
+
+M2_STAGE3_REQUIRED_ORDER = [
     "m2.to_grayscale",
     "m2.brightness_contrast",
     "m2.blur_sharpen",
@@ -729,19 +738,121 @@ def _analyze_module2_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[s
     chain_types = [b.type for b in chain_blocks]
     m2_types = [t for t in chain_types if t.startswith("m2.")]
 
-    required_order = (
-        M2_STAGE2_REQUIRED_ORDER if stage_id == "2" else M2_STAGE1_REQUIRED_ORDER
-    )
-    stage_label = "Stage 2" if stage_id == "2" else "Stage 1"
+    required_order = M2_STAGE1_REQUIRED_ORDER
+    stage_label = "Stage 1"
+
+    if stage_id == "2":
+        required_order = M2_STAGE2_REQUIRED_ORDER
+        stage_label = "Stage 2"
+    elif stage_id == "3":
+        required_order = M2_STAGE3_REQUIRED_ORDER
+        stage_label = "Stage 3"
+
+    validation_errors: List[str] = []
+    invalid_param_block: Optional[str] = None
+
+    if stage_id == "3":
+        loop_body_chain = next(
+            (ch for ch in req.chains if ch.top_block_type == "m2.loop_dataset.body"),
+            None,
+        )
+        loop_body_blocks = loop_body_chain.blocks if loop_body_chain else []
+        loop_types = [b.type for b in loop_body_blocks if b.type.startswith("m2.")]
+
+        loop_idx = chain_types.index("m2.loop_dataset") if "m2.loop_dataset" in chain_types else -1
+        export_idx = chain_types.index("m2.export_dataset") if "m2.export_dataset" in chain_types else -1
+
+        unexpected = [t for t in loop_types if t not in required_order]
+        missing = [t for t in required_order if t not in loop_types]
+        observed_required = [t for t in loop_types if t in required_order]
+        correct_prefix = required_order[: len(observed_required)]
+        order_wrong = observed_required != correct_prefix
+
+        blocks_by_type: Dict[str, BlockModel] = {}
+        for b in loop_body_blocks:
+            if b.type.startswith("m2.") and b.type not in blocks_by_type:
+                blocks_by_type[b.type] = b
+
+        for block_type, expected_fields in M2_STAGE2_REQUIRED_FIELDS.items():
+            blk = blocks_by_type.get(block_type)
+            if not blk:
+                continue
+
+            for field_name, expected_value in expected_fields.items():
+                actual_value = blk.fields.get(field_name)
+                if isinstance(expected_value, (int, float)):
+                    actual_num = _coerce_num(actual_value)
+                    if actual_num is None or actual_num != float(expected_value):
+                        validation_errors.append(
+                            f"{block_type}.{field_name} should be {expected_value}"
+                        )
+                        invalid_param_block = invalid_param_block or block_type
+                else:
+                    if block_type == "m2.normalize" and field_name == "MODE":
+                        normalized = str(actual_value or "")
+                        allowed = {"zero_one", "ZERO_ONE", "0-1", "0_1"}
+                        if normalized not in allowed:
+                            validation_errors.append(
+                                f"{block_type}.{field_name} should be zero_one"
+                            )
+                            invalid_param_block = invalid_param_block or block_type
+                    elif str(actual_value) != str(expected_value):
+                        validation_errors.append(
+                            f"{block_type}.{field_name} should be {expected_value}"
+                        )
+                        invalid_param_block = invalid_param_block or block_type
+
+        if loop_idx == -1:
+            problem_type = "missing"
+            next_missing = "m2.loop_dataset"
+        elif export_idx == -1:
+            problem_type = "missing"
+            next_missing = "m2.export_dataset"
+        elif export_idx <= loop_idx:
+            problem_type = "wrong_order"
+            next_missing = "m2.export_dataset"
+        else:
+            complete = (
+                len(unexpected) == 0
+                and len(missing) == 0
+                and observed_required == required_order
+                and len(validation_errors) == 0
+            )
+
+            if complete:
+                problem_type = "complete"
+            elif unexpected:
+                problem_type = "wrong_block"
+            elif order_wrong:
+                problem_type = "wrong_order"
+            elif validation_errors:
+                problem_type = "invalid_params"
+            else:
+                problem_type = "missing"
+            next_missing = missing[0] if missing else None
+
+        last_block = loop_types[-1] if loop_types else None
+        wrong_block = unexpected[-1] if unexpected else None
+
+        return {
+            "stage_id": stage_id,
+            "stage_label": stage_label,
+            "problem_type": problem_type,
+            "next_missing": next_missing,
+            "last_block": last_block,
+            "wrong_block": wrong_block,
+            "invalid_param_block": invalid_param_block,
+            "validation_errors": validation_errors,
+            "m2_chain": loop_types,
+            "full_chain": chain_types,
+            "expected_order": required_order,
+        }
 
     unexpected = [t for t in m2_types if t not in required_order]
     missing = [t for t in required_order if t not in m2_types]
     observed_required = [t for t in m2_types if t in required_order]
     correct_prefix = required_order[: len(observed_required)]
     order_wrong = observed_required != correct_prefix
-
-    validation_errors: List[str] = []
-    invalid_param_block: Optional[str] = None
 
     if stage_id == "2":
         blocks_by_type: Dict[str, BlockModel] = {}
@@ -820,7 +931,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     analyzer = analyze_module2(req)
     now = time.time()
     stage_id = str(req.stage_id or "1")
-    if stage_id not in {"1", "2"}:
+    if stage_id not in {"1", "2", "3"}:
         stage_id = "1"
 
     key = _history_key(req, request) + f":module2-stage{stage_id}"
@@ -854,17 +965,28 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     history.last_problem_key = problem_key
     history.last_seen = now
 
-    common_context = (
-        f"\n\nCurrent preprocessing chain: {chain_text}. "
-        f"Full chain: {full_chain_text}. "
-        f"Expected {stage_label} order: {expected_text}. "
-        f"Problem type: {problem_type}. "
-        f"Next missing (if any): {next_missing}. "
-        f"Wrong chosen block (if any): {wrong_block}. "
-        f"Invalid parameter block (if any): {invalid_param_block}. "
-        f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
-        f"Repeat count for same mistake: {history.repeat_count}."
-    )
+    if stage_id == "3":
+        # Keep Stage 3 hints conceptual and avoid leaking full ordered answers.
+        common_context = (
+            f"\n\nCurrent preprocessing chain: {chain_text}. "
+            f"Full chain: {full_chain_text}. "
+            f"Problem type: {problem_type}. "
+            f"Next missing (if any): {next_missing}. "
+            f"Wrong chosen block (if any): {wrong_block}. "
+            f"Repeat count for same mistake: {history.repeat_count}."
+        )
+    else:
+        common_context = (
+            f"\n\nCurrent preprocessing chain: {chain_text}. "
+            f"Full chain: {full_chain_text}. "
+            f"Expected {stage_label} order: {expected_text}. "
+            f"Problem type: {problem_type}. "
+            f"Next missing (if any): {next_missing}. "
+            f"Wrong chosen block (if any): {wrong_block}. "
+            f"Invalid parameter block (if any): {invalid_param_block}. "
+            f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
+            f"Repeat count for same mistake: {history.repeat_count}."
+        )
 
     if problem_type == "complete":
         prompt = (
@@ -929,7 +1051,59 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 "Respond in 2-3 short sentences, no bullets."
             ) + common_context
     else:
-        if history.repeat_count >= 2:
+        if stage_id == "3" and next_missing == "m2.loop_dataset":
+            if history.repeat_count >= 2:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The student keeps missing the same first step. "
+                    "Give a clearer nudge that this stage starts with a repeating structure over many images, then briefly explain why that matters. "
+                    "Do NOT list the full pipeline. Do NOT enumerate exact block order. Keep it supportive in 2-3 short sentences, no bullets."
+                ) + common_context
+            elif history.repeat_count == 1:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The student repeated the same start mistake once. "
+                    "Give a clearer hint than before that this stage begins with a repeating structure over the dataset, but avoid command-like wording. "
+                    "Do NOT list full block sequence or exact order. Use 2-3 short sentences, no bullets, friendly tone."
+                ) + common_context
+            else:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "This is the beginning of the stage and the student has not placed the first key structure yet. "
+                    "Give a gentle indirect hint that this mission starts with repetition over the dataset before export, without naming exact block IDs. "
+                    "Do NOT list full block sequence or exact order. Use 2-3 short sentences, no bullets, warm and clear."
+                ) + common_context
+        elif stage_id == "3" and next_missing == "m2.export_dataset":
+            if history.repeat_count >= 1:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The student is repeating the same missing final step. "
+                    "Give a clearer hint that after repeated processing, one final save action should happen outside the loop. "
+                    "Do NOT list the entire recipe or exact ordered block names. Respond in 2-3 short sentences, no bullets, supportive tone."
+                ) + common_context
+            else:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The loop structure exists but the final save action is missing. "
+                    "Give a hint that after processing everything in the loop, there should be one final step that writes results out. "
+                    "Do NOT list full sequence or exact order. Respond in 2-3 short sentences, no bullets."
+                ) + common_context
+        elif stage_id == "3":
+            if history.repeat_count >= 1:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The student is still missing part of the loop-body recipe. "
+                    "Give a clearer hint that the loop body should contain the recipe in a sensible flow, while keeping a coaching tone. "
+                    "Give only one next-step hint. Do NOT enumerate the full sequence or exact order. Respond in 2-3 short sentences, no bullets."
+                ) + common_context
+            else:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "A required piece is still missing in this stage. "
+                    "Gently hint that the loop should contain the complete preprocessing recipe before the final export step. "
+                    "Give only one next-step hint. Do NOT enumerate full sequence or exact order. Respond in 2-3 short sentences, no bullets, friendly tone."
+                ) + common_context
+        elif history.repeat_count >= 2:
             prompt = (
                 f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student still cannot find the missing step after repeated tries. "

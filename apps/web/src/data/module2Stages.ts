@@ -146,10 +146,10 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 4 – Loop & Export
+  // STAGE 3 – Loop & Export
   {
-    id: 4,
-    title: "Stage 4: Loop & Export",
+    id: 3,
+    title: "Stage 3: Loop & Export",
     type: "loop_export",
     intro: [
       "Put your whole preprocessing pipeline inside the loop block.",

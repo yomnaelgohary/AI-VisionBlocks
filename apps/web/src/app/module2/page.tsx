@@ -19,8 +19,8 @@ export default function Module2Index() {
         "Resize and pad to a 150×150 frame, then normalize to 0–1 for stable model-ready inputs.",
     },
     {
-      id: "4",
-      title: "Stage 4: Looping & Exporting",
+      id: "3",
+      title: "Stage 3: Looping & Exporting",
       short:
         "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
     },
@@ -171,7 +171,7 @@ export default function Module2Index() {
                     <div className="flex flex-col">
                       <span className="text-xs text-gray-500">
                         {isBonus
-                          ? "Try this after Stage 4"
+                          ? "Try this after Stage 3"
                           : "Recommended: follow the stages in order"}
                       </span>
                     </div>

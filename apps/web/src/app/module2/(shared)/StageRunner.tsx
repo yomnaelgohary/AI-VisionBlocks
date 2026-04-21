@@ -551,7 +551,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   function requestStageAgentHintDebounced(ws: WorkspaceSvg) {
     if (!stage) return;
     const sid = String(stage.id);
-    if (sid !== "1" && sid !== "2") return;
+    if (sid !== "1" && sid !== "2" && sid !== "3") return;
 
     if (m2AgentTimerRef.current) clearTimeout(m2AgentTimerRef.current);
     m2AgentTimerRef.current = setTimeout(async () => {
@@ -559,6 +559,19 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         top_block_type: chain[0]?.type || null,
         blocks: chain.map((b) => blockToAnalyzerModel(b)),
       }));
+
+      if (sid === "3") {
+        const allBlocks = ws.getAllBlocks(false) as BlocklyBlock[];
+        const loopBlock = allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
+        const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
+        if (loopInner) {
+          const loopBodyBlocks: AnalyzerBlock[] = [];
+          for (let b: BlocklyBlock | null = loopInner; b; b = b.getNextBlock()) {
+            loopBodyBlocks.push(blockToAnalyzerModel(b));
+          }
+          chains.push({ top_block_type: "m2.loop_dataset.body", blocks: loopBodyBlocks });
+        }
+      }
 
       const payload: AnalyzeAgentReq = {
         chains,
@@ -615,9 +628,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     m2AgentSigRef.current = "";
     setAiAssistantLoading(false);
     setAiAssistantText(
-      String(stage.id) === "2"
+      String(stage.id) === "1"
+        ? "LLM assistant is waiting for your Stage 1 edits..."
+        : String(stage.id) === "2"
         ? "LLM assistant is waiting for your Stage 2 edits..."
-        : "LLM assistant is waiting for your Stage 1 edits..."
+        : "LLM assistant is waiting for your Stage 3 edits..."
     );
 
     const ws = Blockly.inject(blocklyDivRef.current, {
@@ -1280,8 +1295,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }
     }
 
-    // Stage 4: resize + pad in loop body but not exactly 150×150
-    if (stageKey === "4") {
+    // Stage 3: resize + pad in loop body but not exactly 150×150
+    if (stageKey === "3") {
       const loopBlock =
         allBlocks.find((b) => b.type === "m2.loop_dataset") || null;
       const loopInner = loopBlock?.getInputTargetBlock("DO") || null;
@@ -1420,7 +1435,7 @@ function updateBaymaxFromChecklist(
     // For pipeline stages 1–4, we want the top-to-bottom
     // "after this block should be THAT block" style hints.
     if (s.type === "pipeline" && ["1", "2"].includes(stageKey)) {
-      // Special param hints first: 150×150 and normalize-mode for 3 & 4
+      // Special param hints first: 150×150 and normalize-mode
       if (
         stageKey === "2" &&
         missing.length === 0 &&
@@ -1463,10 +1478,10 @@ function updateBaymaxFromChecklist(
       // to the generic wrong-place messages below.
     }
 
-    // 🔹 NEW: Stage 4 – loop body has resize/pad but not 150×150
+    // Stage 3 – loop body has resize/pad but not 150×150
     if (
       s.type === "loop_export" &&
-      stageKey === "4" &&
+      stageKey === "3" &&
       missing.length === 0 &&
       hints.resizePadAlmost150
     ) {
@@ -1483,7 +1498,7 @@ function updateBaymaxFromChecklist(
       return;
     }
 
-    // Loop/export stage (Stage 4) or generic fallback
+    // Loop/export stage (Stage 3) or generic fallback
     const lines =
       s.type === "loop_export"
         ? [
@@ -1509,7 +1524,7 @@ function updateBaymaxFromChecklist(
   /* ---------- Missing blocks ---------- */
   if (missing.length > 0) {
     if (s.type === "loop_export") {
-      // Stage 4 / loop-export style hints
+      // Stage 3 / loop-export style hints
       if (loopItem?.state === "missing") {
         const lines = [
           "For automation we need a loop first. Add the loop block so your preprocessing recipe can run over many images instead of just one.",
@@ -1539,7 +1554,7 @@ function updateBaymaxFromChecklist(
 
       const lines = [
         "For this mission we want the whole preprocessing recipe running inside the loop, then a final step after it that saves everything as a new dataset. Check that all the key steps made it into the loop body.",
-            "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–3 pipeline.",
+            "Your loop is running, but not all the core steps are inside it yet. Treat the loop body like a tiny version of your Stage 1–2 pipeline.",
         "We still need your full preprocessing recipe inside the loop, and a single export block after the loop that writes out the processed dataset.",
       ];
       setBaymaxState(
@@ -1572,11 +1587,11 @@ function updateBaymaxFromChecklist(
         "hint",
         true
       );
-    } else if (stageKey === "4") {
+    } else if (stageKey === "3") {
       const lines = [
-        "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–3 pipeline, and there should be a save step after the loop.",
+        "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–2 pipeline, and there should be a save step after the loop.",
         "We’re almost in production mode. Make sure your loop actually applies the full recipe, and that the export block is ready to write out the new dataset.",
-        "Stage 4 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
+        "Stage 3 expects: dataset → loop over images → full preprocessing inside the loop → one export block at the end. Something in that chain is still missing.",
       ];
       setBaymaxState(
         pickLine(lines, stageKey + "-missing-" + missing.length),
@@ -2049,7 +2064,7 @@ function updateBaymaxFromChecklist(
                 />
               </div>
 
-              {(String(stage.id) === "1" || String(stage.id) === "2") && (
+              {(String(stage.id) === "1" || String(stage.id) === "2" || String(stage.id) === "3") && (
                 <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
