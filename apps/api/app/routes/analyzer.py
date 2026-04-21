@@ -31,6 +31,8 @@ class AnalyzeRequest(BaseModel):
     chains: List[ChainModel]
     # optional client-side signature to help debugging / caching
     client_signature: Optional[str] = None
+    # optional stage id for stage-aware tutoring (module 2)
+    stage_id: Optional[str] = None
 
 
 class ChecklistItem(BaseModel):
@@ -69,14 +71,14 @@ class _StudentHistory(BaseModel):
 _HISTORY: Dict[str, _StudentHistory] = {}
 
 
-class _Module2Stage1History(BaseModel):
+class _Module2StageHistory(BaseModel):
     last_problem_key: Optional[str] = None
     repeat_count: int = 0
     last_hint: Optional[str] = None
     last_seen: float = 0.0
 
 
-_M2_STAGE1_HISTORY: Dict[str, _Module2Stage1History] = {}
+_M2_STAGE_HISTORY: Dict[str, _Module2StageHistory] = {}
 
 
 REQUIRED_ORDER = [
@@ -545,6 +547,37 @@ M2_STAGE1_REQUIRED_ORDER = [
     "m2.blur_sharpen",
 ]
 
+M2_STAGE2_REQUIRED_ORDER = [
+    "m2.to_grayscale",
+    "m2.brightness_contrast",
+    "m2.blur_sharpen",
+    "m2.resize",
+    "m2.pad",
+]
+
+M2_STAGE2_REQUIRED_FIELDS: Dict[str, Dict[str, Any]] = {
+    "m2.brightness_contrast": {"B": 10, "C": 10},
+    "m2.blur_sharpen": {"BLUR": 0, "SHARP": 1},
+    "m2.resize": {"MODE": "size", "W": 150, "H": 150},
+    "m2.pad": {"W": 150, "H": 150},
+}
+
+
+def _find_primary_chain(req: AnalyzeRequest) -> Optional[ChainModel]:
+    for ch in req.chains:
+        if any(b.type == "dataset.select" for b in ch.blocks):
+            return ch
+    if req.chains:
+        return req.chains[0]
+    return None
+
+
+def _coerce_num(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
 
 def _map_m2_block_to_action(b: BlockModel, dataset_key: Optional[str], sample_conf: Optional[Dict[str, Any]]):
     t = b.type
@@ -706,29 +739,59 @@ def analyze_module2(req: AnalyzeRequest):
     return AnalyzeResponse(signature=sig, chains=req.chains, checklist=checklist, planned_actions=planned)
 
 
-def _analyze_module2_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
-    primary_chain = None
-    for ch in req.chains:
-        if any(b.type == "dataset.select" for b in ch.blocks):
-            primary_chain = ch
-            break
-    if primary_chain is None and req.chains:
-        primary_chain = req.chains[0]
+def _analyze_module2_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[str, Any]:
+    primary_chain = _find_primary_chain(req)
 
     chain_blocks = primary_chain.blocks if primary_chain else []
     chain_types = [b.type for b in chain_blocks]
     m2_types = [t for t in chain_types if t.startswith("m2.")]
-    unexpected = [t for t in m2_types if t not in M2_STAGE1_REQUIRED_ORDER]
-    missing = [t for t in M2_STAGE1_REQUIRED_ORDER if t not in m2_types]
-    observed_required = [t for t in m2_types if t in M2_STAGE1_REQUIRED_ORDER]
 
-    correct_prefix = M2_STAGE1_REQUIRED_ORDER[: len(observed_required)]
+    required_order = (
+        M2_STAGE2_REQUIRED_ORDER if stage_id == "2" else M2_STAGE1_REQUIRED_ORDER
+    )
+    stage_label = "Stage 2" if stage_id == "2" else "Stage 1"
+
+    unexpected = [t for t in m2_types if t not in required_order]
+    missing = [t for t in required_order if t not in m2_types]
+    observed_required = [t for t in m2_types if t in required_order]
+    correct_prefix = required_order[: len(observed_required)]
     order_wrong = observed_required != correct_prefix
+
+    validation_errors: List[str] = []
+    invalid_param_block: Optional[str] = None
+
+    if stage_id == "2":
+        blocks_by_type: Dict[str, BlockModel] = {}
+        for b in chain_blocks:
+            if b.type.startswith("m2.") and b.type not in blocks_by_type:
+                blocks_by_type[b.type] = b
+
+        for block_type, expected_fields in M2_STAGE2_REQUIRED_FIELDS.items():
+            blk = blocks_by_type.get(block_type)
+            if not blk:
+                continue
+
+            for field_name, expected_value in expected_fields.items():
+                actual_value = blk.fields.get(field_name)
+                if isinstance(expected_value, (int, float)):
+                    actual_num = _coerce_num(actual_value)
+                    if actual_num is None or actual_num != float(expected_value):
+                        validation_errors.append(
+                            f"{block_type}.{field_name} should be {expected_value}"
+                        )
+                        invalid_param_block = invalid_param_block or block_type
+                else:
+                    if str(actual_value) != str(expected_value):
+                        validation_errors.append(
+                            f"{block_type}.{field_name} should be {expected_value}"
+                        )
+                        invalid_param_block = invalid_param_block or block_type
 
     complete = (
         len(unexpected) == 0
         and len(missing) == 0
-        and observed_required == M2_STAGE1_REQUIRED_ORDER
+        and observed_required == required_order
+        and len(validation_errors) == 0
     )
 
     if complete:
@@ -737,6 +800,8 @@ def _analyze_module2_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
         problem_type = "wrong_block"
     elif order_wrong:
         problem_type = "wrong_order"
+    elif validation_errors:
+        problem_type = "invalid_params"
     else:
         problem_type = "missing"
 
@@ -745,12 +810,17 @@ def _analyze_module2_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
     wrong_block = unexpected[-1] if unexpected else None
 
     return {
+        "stage_id": stage_id,
+        "stage_label": stage_label,
         "problem_type": problem_type,
         "next_missing": next_missing,
         "last_block": last_block,
         "wrong_block": wrong_block,
+        "invalid_param_block": invalid_param_block,
+        "validation_errors": validation_errors,
         "m2_chain": m2_types,
         "full_chain": chain_types,
+        "expected_order": required_order,
     }
 
 
@@ -758,18 +828,29 @@ def _analyze_module2_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
 def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     analyzer = analyze_module2(req)
     now = time.time()
-    key = _history_key(req, request) + ":module2-stage1"
-    history = _M2_STAGE1_HISTORY.get(key) or _Module2Stage1History()
+    stage_id = str(req.stage_id or "1")
+    if stage_id not in {"1", "2"}:
+        stage_id = "1"
 
-    stage1 = _analyze_module2_stage1_problem(req)
-    problem_type = stage1["problem_type"]
-    next_missing = stage1["next_missing"]
-    wrong_block = stage1["wrong_block"]
-    chain_text = " -> ".join(stage1["m2_chain"]) or "empty"
-    full_chain_text = " -> ".join(stage1["full_chain"]) or "empty"
-    expected_text = " -> ".join(M2_STAGE1_REQUIRED_ORDER)
+    key = _history_key(req, request) + f":module2-stage{stage_id}"
+    history = _M2_STAGE_HISTORY.get(key) or _Module2StageHistory()
 
-    problem_key = f"{problem_type}|missing={next_missing}|wrong={wrong_block}|chain={chain_text}"
+    stage_problem = _analyze_module2_stage_problem(req, stage_id)
+    stage_label = stage_problem["stage_label"]
+    problem_type = stage_problem["problem_type"]
+    next_missing = stage_problem["next_missing"]
+    wrong_block = stage_problem["wrong_block"]
+    invalid_param_block = stage_problem["invalid_param_block"]
+    validation_errors = stage_problem["validation_errors"]
+    chain_text = " -> ".join(stage_problem["m2_chain"]) or "empty"
+    full_chain_text = " -> ".join(stage_problem["full_chain"]) or "empty"
+    expected_text = " -> ".join(stage_problem["expected_order"])
+
+    problem_key = (
+        f"{problem_type}|missing={next_missing}|wrong={wrong_block}|"
+        f"invalid={invalid_param_block}|chain={chain_text}|"
+        f"validation={json.dumps(validation_errors, ensure_ascii=True)}"
+    )
 
     if problem_type == "complete":
         history.repeat_count = 0
@@ -785,32 +866,34 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     common_context = (
         f"\n\nCurrent preprocessing chain: {chain_text}. "
         f"Full chain: {full_chain_text}. "
-        f"Expected Stage 1 order: {expected_text}. "
+        f"Expected {stage_label} order: {expected_text}. "
         f"Problem type: {problem_type}. "
         f"Next missing (if any): {next_missing}. "
         f"Wrong chosen block (if any): {wrong_block}. "
+        f"Invalid parameter block (if any): {invalid_param_block}. "
+        f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
         f"Repeat count for same mistake: {history.repeat_count}."
     )
 
     if problem_type == "complete":
         prompt = (
-            "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
-            "The student has the correct three-block chain in the correct order. "
+            f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
+            "The student has the correct chain in the correct order and valid values for this stage. "
             "Respond in 1-2 short sentences: praise, confirm order correctness, and encourage pressing Next Test or Submit when appropriate. "
             "Friendly tone, no bullets."
         ) + common_context
     elif problem_type == "wrong_block":
         if history.repeat_count >= 2:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student repeatedly chose a wrong block. "
-                "Now be explicit: name the exact correct block they need next and explain why that block fits Stage 1. "
+                "Now be explicit: name the exact correct block they need next and explain why that block fits this stage. "
                 "Also explain briefly why the chosen wrong block does not fit this stage goal. "
                 "Respond in 2-3 short sentences, no bullets, warm but clear."
             ) + common_context
         elif history.repeat_count == 1:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student repeated a wrong block choice once. "
                 "Give an easier hint than before and explain why their chosen block is not suitable yet. "
                 "Do NOT reveal the exact block name they need. "
@@ -818,7 +901,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
             ) + common_context
         else:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student chose a wrong block. "
                 "Explain what is wrong with that choice and give an indirect hint about the right kind of step. "
                 "Do NOT reveal the exact missing block name. "
@@ -827,36 +910,51 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     elif problem_type == "wrong_order":
         if history.repeat_count >= 1:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student repeated order mistakes. "
                 "Now state the correct full order directly and explain why this order is correct for preprocessing logic. "
                 "Respond in 2-3 short sentences, no bullets."
             ) + common_context
         else:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Blocks are mostly correct but order is wrong. "
                 "Explain clearly that order is the issue and provide a guiding hint toward the correct order without listing the exact full chain verbatim. "
                 "Respond in 2-3 short sentences, no bullets, gentle tone."
             ) + common_context
+    elif problem_type == "invalid_params":
+        if history.repeat_count >= 1:
+            prompt = (
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
+                "The student has the right blocks in the right order but wrong parameter values. "
+                "Be explicit now: name the exact block fields and the exact values to set. "
+                "Respond in 2-3 short sentences, no bullets, clear and friendly."
+            ) + common_context
+        else:
+            prompt = (
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
+                "The student has the right blocks in the right order but parameter values are off. "
+                "Give one concrete hint about which block values need adjustment, without dumping a long checklist. "
+                "Respond in 2-3 short sentences, no bullets."
+            ) + common_context
     else:
         if history.repeat_count >= 2:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student still cannot find the missing step after repeated tries. "
                 "Now explicitly tell the exact block they should add next and explain why this is the correct block at this point. "
                 "Respond in 2-3 short sentences, no bullets."
             ) + common_context
         elif history.repeat_count == 1:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "Student missed the same step again. "
                 "Give an easier and more concrete hint than before, but still do not name the exact missing block. "
                 "Respond in 2-3 short sentences, no bullets."
             ) + common_context
         else:
             prompt = (
-                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 1. "
+                f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "A required step is missing. "
                 "Give one indirect hint to help find the missing step without naming it directly. "
                 "Respond in 2-3 short sentences, no bullets, friendly tone."
@@ -864,6 +962,6 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
 
     agent_text = _call_openrouter(prompt)
     history.last_hint = agent_text
-    _M2_STAGE1_HISTORY[key] = history
+    _M2_STAGE_HISTORY[key] = history
 
     return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)

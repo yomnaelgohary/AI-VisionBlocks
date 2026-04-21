@@ -83,6 +83,7 @@ type AnalyzerChain = { top_block_type: string | null; blocks: AnalyzerBlock[] };
 type AnalyzeAgentReq = {
   chains: AnalyzerChain[];
   client_signature?: string;
+  stage_id?: string;
 };
 type AnalyzeAgentResp = {
   analyzer: {
@@ -194,11 +195,35 @@ function findBlockByTypeInChain(
 
 function findFirstPipelineTop(ws: WorkspaceSvg): BlocklyBlock | null {
   const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+
+  // Use the chain connected under dataset -> sample as the authoritative pipeline.
+  // This avoids mismatches when users have detached m2 blocks elsewhere.
   for (const top of tops) {
+    let sawDataset = false;
+    let sawSample = false;
+    let afterSample = false;
+
     for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-      if (b.type.startsWith("m2.")) return top;
+      if (b.type === "dataset.select") {
+        sawDataset = true;
+      }
+      if (b.type === "dataset.sample_image") {
+        sawSample = true;
+        afterSample = true;
+        continue;
+      }
+      if (afterSample && b.type.startsWith("m2.")) {
+        return top;
+      }
+    }
+
+    // If chain has dataset+sample but no m2 blocks after sample, it isn't a pipeline yet.
+    if (sawDataset && sawSample) {
+      return null;
     }
   }
+
+  // No valid connected pipeline found.
   return null;
 }
 
@@ -523,8 +548,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     });
   }
 
-  function requestStage1AgentHintDebounced(ws: WorkspaceSvg) {
-    if (!stage || String(stage.id) !== "1") return;
+  function requestStageAgentHintDebounced(ws: WorkspaceSvg) {
+    if (!stage) return;
+    const sid = String(stage.id);
+    if (sid !== "1" && sid !== "2") return;
 
     if (m2AgentTimerRef.current) clearTimeout(m2AgentTimerRef.current);
     m2AgentTimerRef.current = setTimeout(async () => {
@@ -535,7 +562,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
       const payload: AnalyzeAgentReq = {
         chains,
-        client_signature: "module2-stage1-live",
+        stage_id: sid,
+        client_signature: `module2-stage${sid}-live`,
       };
 
       const sig = JSON.stringify(payload);
@@ -586,7 +614,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     sampleRef.current = null;
     m2AgentSigRef.current = "";
     setAiAssistantLoading(false);
-    setAiAssistantText("LLM assistant is waiting for your Stage 1 edits...");
+    setAiAssistantText(
+      String(stage.id) === "2"
+        ? "LLM assistant is waiting for your Stage 2 edits..."
+        : "LLM assistant is waiting for your Stage 1 edits..."
+    );
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
@@ -615,6 +647,37 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       const next = (ds as any).nextConnection;
       if (next && smp.previousConnection) {
         next.connect(smp.previousConnection);
+      }
+
+      // Stage 2 starts with Stage 1 preprocessing chain already connected.
+      // Student only needs to add resize + pad (with the correct 150x150 settings).
+      if (String(stage.id) === "2") {
+        const gray = ws.newBlock("m2.to_grayscale");
+        gray.initSvg();
+        gray.render();
+
+        const bc = ws.newBlock("m2.brightness_contrast");
+        bc.initSvg();
+        bc.setFieldValue("10", "B");
+        bc.setFieldValue("10", "C");
+        bc.render();
+
+        const bs = ws.newBlock("m2.blur_sharpen");
+        bs.initSvg();
+        bs.setFieldValue("0", "BLUR");
+        bs.setFieldValue("1", "SHARP");
+        bs.render();
+
+        const sampleNext = (smp as any).nextConnection;
+        if (sampleNext && gray.previousConnection) {
+          sampleNext.connect(gray.previousConnection);
+        }
+        if (gray.nextConnection && bc.previousConnection) {
+          gray.nextConnection.connect(bc.previousConnection);
+        }
+        if (bc.nextConnection && bs.previousConnection) {
+          bc.nextConnection.connect(bs.previousConnection);
+        }
       }
 
     } else {
@@ -655,7 +718,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         lastChecklistRef.current = items;
 
         updateBaymaxFromChecklist(stage, items, prev);
-        requestStage1AgentHintDebounced(wsNow);
+        requestStageAgentHintDebounced(wsNow);
         updateToolboxGlow();
       }, 200);
     };
