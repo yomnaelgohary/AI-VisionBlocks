@@ -2097,7 +2097,7 @@ function updateBaymaxFromChecklist(
                 />
               </div>
 
-              {String(stage.id) === "1" && (
+              {(String(stage.id) === "1" || String(stage.id) === "2") && (
                 <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
