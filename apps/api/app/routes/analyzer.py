@@ -316,6 +316,9 @@ def _call_openrouter(prompt: str) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
+        # Some OpenRouter providers/models still validate against prompt-style input.
+        # Sending both keeps chat models working while satisfying stricter adapters.
+        "prompt": prompt,
         "max_tokens": 64,
         "temperature": 0.2,
     }
@@ -335,7 +338,31 @@ def _call_openrouter(prompt: str) -> str:
                     detail="OpenRouter rate limited or temporarily unavailable",
                 )
             else:
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except requests.HTTPError as exc:
+                    detail_text = ""
+                    try:
+                        payload = resp.json()
+                        if isinstance(payload, dict):
+                            detail_text = payload.get("error", {}).get("message") or payload.get("message") or ""
+                    except Exception:
+                        detail_text = (resp.text or "")[:400]
+                    status_code = resp.status_code if resp.status_code >= 400 else 502
+                    last_error = HTTPException(
+                        status_code=status_code,
+                        detail=(
+                            f"OpenRouter request failed ({status_code}). "
+                            f"model={model}, url={url}. {detail_text}".strip()
+                        ),
+                    )
+                    if attempt < max_attempts - 1:
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                    if isinstance(last_error, HTTPException):
+                        raise last_error
+                    raise exc
                 data = resp.json()
                 if isinstance(data, dict) and data.get("choices"):
                     msg = data["choices"][0].get("message") or {}
