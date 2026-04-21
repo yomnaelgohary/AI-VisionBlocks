@@ -14,15 +14,9 @@ export default function Module2Index() {
     },
     {
       id: "2",
-      title: "Stage 2: Resize & Pad",
+      title: "Stage 2: Resize, Pad & Normalize",
       short:
-        "Make images fit a consistent square size by resizing with aspect ratio and padding the rest.",
-    },
-    {
-      id: "3",
-      title: "Stage 3: Normalize",
-      short:
-        "Rescale pixel values to a stable range (like 0–1) so training is smooth and stable.",
+        "Resize and pad to a 150×150 frame, then normalize to 0–1 for stable model-ready inputs.",
     },
     {
       id: "4",
@@ -114,7 +108,7 @@ export default function Module2Index() {
               ? "from-purple-200/70 via-sky-100/60 to-white/80"
               : "from-sky-200/70 via-purple-100/60 to-white/80";
 
-            const coreLabel = isBonus ? "" : `Core stage ${index + 1}`;
+            const coreLabel = isBonus ? "" : `Core stage ${stage.id}`;
 
             return (
               <motion.div

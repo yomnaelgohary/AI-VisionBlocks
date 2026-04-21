@@ -10,7 +10,15 @@ export type OpSpec =
       maxside?: number;
       keep?: "TRUE" | "FALSE";
     }
-  | { type: "pad"; w: number; h: number; mode?: "constant" | "edge" | "reflect" }
+  | {
+      type: "pad";
+      w: number;
+      h: number;
+      mode?: "constant" | "edge" | "reflect";
+      r?: number;
+      g?: number;
+      b?: number;
+    }
   | { type: "brightness_contrast"; b?: number; c?: number }
   | { type: "blur_sharpen"; blur?: number; sharp?: number }
   | { type: "normalize"; mode?: "zero_one" | "minus_one_one" | "zscore" }
@@ -41,6 +49,7 @@ export type StageConfig =
       requiredBlocksWithinLoop: string[];
       expectedOrderWithinLoop?: string[];
       requireExportAfterLoop?: boolean;
+      targetOps?: OpSpec[];
     };
 
 // ---------- Stages (new structure) ----------
@@ -84,17 +93,17 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 2 – Resize & Pad
+  // STAGE 2 – Resize, Pad & Normalize
   {
     id: 2,
-    title: "Stage 2: Resize & Pad",
+    title: "Stage 2: Resize, Pad & Normalize",
     type: "pipeline",
     intro: [
       "Resize images so they share a consistent size while keeping aspect ratio.",
-      "Then pad to a clean 150×150 square so every sample fits the same frame.",
+      "Then pad to a clean 150×150 square and normalize values to 0-1.",
     ],
     help: {
-      title: "Why Resize and Pad Images?",
+      title: "Why Resize, Pad, and Normalize?",
       text: `
     Neural networks expect every image to be the same size, but real datasets come in all shapes:
     wide, tall, small, big, or anything in between.
@@ -102,62 +111,13 @@ export const module2Stages: StageConfig[] = [
     • Resize: shrinks or expands the image so its biggest side fits the target size.
       (We keep the original shape so things don’t look stretched or squished.)
     • Pad: adds blank space around the image so it becomes a perfect square like 150×150.
+    • Normalize: rescales pixel values into 0-1 so training receives stable numeric input.
 
     Imagine placing many different photos into identical picture frames.
-    Resizing makes them fit inside; padding fills the leftover space so the frame stays neat.
+    Resizing makes them fit inside; padding fills leftover space; normalization keeps the numbers calm and consistent.
     `.trim(),
     },
-    // Build on Stage 1, then add resize + pad
-    requiredBlocks: [
-      "m2.to_grayscale",
-      "m2.brightness_contrast",
-      "m2.blur_sharpen",
-      "m2.resize",
-      "m2.pad",
-    ],
-    expectedOrder: [
-      "m2.to_grayscale",
-      "m2.brightness_contrast",
-      "m2.blur_sharpen",
-      "m2.resize",
-      "m2.pad",
-    ],
-    targetOps: [
-      { type: "to_grayscale" },
-      { type: "brightness_contrast", b: 10, c: 10 },
-      { type: "blur_sharpen", blur: 0, sharp: 1.0 },
-      // then resize towards 150 while keeping aspect ratio
-      { type: "resize", mode: "size", w: 150, h: 256, keep: "TRUE" },
-      // and pad to exactly 150×150
-      { type: "pad", w: 150, h: 150, mode: "constant" },
-    ],
-  },
-
-  // STAGE 3 – Normalize
-  {
-    id: 3,
-    title: "Stage 3: Normalize",
-    type: "pipeline",
-    intro: [
-      "Normalize pixel values into a small, consistent range such as 0–1.",
-      "This helps training stay stable and prevents large raw values from causing trouble.",
-    ],
-    help: {
-      title: "Why Normalize Pixel Values?",
-      text: `
-    Raw pixel values go from 0 to 255.
-    Feeding these big numbers into a model can make learning uneven or unstable.
-
-    Normalization rescales every pixel into a small, predictable range like 0–1. This helps because:
-
-    • All images become comparable to each other.
-    • The model learns more smoothly and consistently.
-    • Training becomes faster and avoids “wild jumps”.
-
-    It’s like converting all exam scores to a 0–1 scale before averaging them, everything becomes fair and stable.
-    `.trim(),
-    },
-    // Build on Stage 2, then add normalization at the end
+    // Build on Stage 1, then add resize + pad + normalize
     requiredBlocks: [
       "m2.to_grayscale",
       "m2.brightness_contrast",

@@ -471,26 +471,7 @@ STAGE_REQUIREMENTS = [
     },
     {
         "key": "stage2",
-        "label": "Stage 2: Resize & Pad",
-        "type": "pipeline",
-        "required": [
-            "m2.to_grayscale",
-            "m2.brightness_contrast",
-            "m2.blur_sharpen",
-            "m2.resize",
-            "m2.pad",
-        ],
-        "order": [
-            "m2.to_grayscale",
-            "m2.brightness_contrast",
-            "m2.blur_sharpen",
-            "m2.resize",
-            "m2.pad",
-        ],
-    },
-    {
-        "key": "stage3",
-        "label": "Stage 3: Normalize",
+        "label": "Stage 2: Resize, Pad & Normalize",
         "type": "pipeline",
         "required": [
             "m2.to_grayscale",
@@ -553,6 +534,7 @@ M2_STAGE2_REQUIRED_ORDER = [
     "m2.blur_sharpen",
     "m2.resize",
     "m2.pad",
+    "m2.normalize",
 ]
 
 M2_STAGE2_REQUIRED_FIELDS: Dict[str, Dict[str, Any]] = {
@@ -560,6 +542,7 @@ M2_STAGE2_REQUIRED_FIELDS: Dict[str, Dict[str, Any]] = {
     "m2.blur_sharpen": {"BLUR": 0, "SHARP": 1},
     "m2.resize": {"MODE": "size", "W": 150, "H": 150},
     "m2.pad": {"W": 150, "H": 150},
+    "m2.normalize": {"MODE": "zero_one"},
 }
 
 
@@ -781,7 +764,15 @@ def _analyze_module2_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[s
                         )
                         invalid_param_block = invalid_param_block or block_type
                 else:
-                    if str(actual_value) != str(expected_value):
+                    if block_type == "m2.normalize" and field_name == "MODE":
+                        normalized = str(actual_value or "")
+                        allowed = {"zero_one", "ZERO_ONE", "0-1", "0_1"}
+                        if normalized not in allowed:
+                            validation_errors.append(
+                                f"{block_type}.{field_name} should be zero_one"
+                            )
+                            invalid_param_block = invalid_param_block or block_type
+                    elif str(actual_value) != str(expected_value):
                         validation_errors.append(
                             f"{block_type}.{field_name} should be {expected_value}"
                         )

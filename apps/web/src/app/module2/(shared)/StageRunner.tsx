@@ -283,7 +283,7 @@ function pickLine(options: string[], key: string): string {
 /* ----------------- Stage target ops helper ----------------- */
 /**
  * Build the ops used to generate the TARGET image.
- * For Stage 2/3 we force a true 150×150 resize AND 150×150 pad
+ * For Stage 2 we force a true 150×150 resize AND 150×150 pad
  * so the visual goal always shows a clean square frame.
  */
 function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
@@ -292,7 +292,7 @@ function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
   const stageKey = String(stage.id);
   const base = stage.targetOps.map((op) => ({ ...(op as any) })) as OpSpec[];
 
-  if (stageKey === "2" || stageKey === "3") {
+  if (stageKey === "2") {
     let hasResize = false;
     let hasPad = false;
 
@@ -1243,8 +1243,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }
     }
 
-    // Stages 2 & 3: resize + pad present but not exactly 150×150 (pipeline)
-    if (stageKey === "2" || stageKey === "3") {
+    // Stage 2: resize + pad present but not exactly 150×150 (pipeline)
+    if (stageKey === "2") {
       const top = findFirstPipelineTop(ws);
       if (top) {
         const resizeBlock = findBlockByTypeInChain(top, "m2.resize");
@@ -1264,19 +1264,17 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           }
         }
 
-        if (stageKey === "3") {
-          const normBlock = findBlockByTypeInChain(top, "m2.normalize");
-          if (normBlock) {
-            const mode = (normBlock.getFieldValue("MODE") || "").toString();
-            // Allow a few possible spellings of "0-1"
-            const is01 =
-              mode === "0-1" ||
-              mode === "0_1" ||
-              mode === "zero_one" ||
-              mode === "ZERO_ONE";
-            if (!is01 && mode !== "") {
-              hints.normalizeModeNot01 = true;
-            }
+        const normBlock = findBlockByTypeInChain(top, "m2.normalize");
+        if (normBlock) {
+          const mode = (normBlock.getFieldValue("MODE") || "").toString();
+          // Allow a few possible spellings of "0-1"
+          const is01 =
+            mode === "0-1" ||
+            mode === "0_1" ||
+            mode === "zero_one" ||
+            mode === "ZERO_ONE";
+          if (!is01 && mode !== "") {
+            hints.normalizeModeNot01 = true;
           }
         }
       }
@@ -1326,7 +1324,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
    *   “After X, I was expecting Y, but I see Z instead.”
    *
    * Used for the “the next step should be THIS block, not THAT block”
-  * behaviour (including Stage 3 with normalize).
+  * behaviour (including normalize in Stage 2).
    */
   function pipelineNextStepHint(
     s: StageConfig,
@@ -1421,32 +1419,17 @@ function updateBaymaxFromChecklist(
   if (wrong.length > 0) {
     // For pipeline stages 1–4, we want the top-to-bottom
     // "after this block should be THAT block" style hints.
-    if (s.type === "pipeline" && ["1", "2", "3"].includes(stageKey)) {
+    if (s.type === "pipeline" && ["1", "2"].includes(stageKey)) {
       // Special param hints first: 150×150 and normalize-mode for 3 & 4
       if (
-        (stageKey === "2" || stageKey === "3") &&
+        stageKey === "2" &&
         missing.length === 0 &&
         hints.resizePadAlmost150
       ) {
-        if (stageKey === "3") {
-          const lines = [
-            "You’ve got resize and pad in this stage, but their sizes don’t match the 150 × 150 target yet. Fix those numbers first, then make sure your normalization step is in the right mode.",
-            "The blocks are right, the order is fine, but the frame size is off. Set both resize and pad to 150 by 150, then check your normalize block afterward.",
-            "Structure looks good. The next step is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
-          ];
-          setBaymaxState(
-            pickLine(lines, stageKey + "-wrong-params-150-stage3"),
-            "warning",
-            true
-          );
-          return;
-        }
-
-        // Stage 2
         const lines = [
-          "You’ve found the right blocks for this stage, resize and pad are both in place. Now fine-tune them: set both to exactly 150 × 150 so your output frame matches the target.",
-          "Almost perfect framing. You’re using resize and pad, but to pass this stage they both need to say 150 by 150. Once those numbers match, the target should line up.",
-          "The structure is correct. The last piece is numeric: make sure the resize block makes the image 150 × 150 and the pad block also uses 150 × 150.",
+          "You’ve found the right blocks for this stage, and resize/pad are in place. Now fine-tune both to exactly 150 × 150, then check normalize mode is set to 0–1.",
+          "Almost perfect framing. Set resize and pad to 150 by 150, then switch normalize to 0–1 so the output fully matches the stage goal.",
+          "The structure is correct. Final tuning: resize and pad should both be 150 × 150, and normalize should use 0–1.",
         ];
         setBaymaxState(
           pickLine(lines, stageKey + "-wrong-params-150"),
@@ -1456,11 +1439,11 @@ function updateBaymaxFromChecklist(
         return;
       }
 
-      if (stageKey === "3" && missing.length === 0 && hints.normalizeModeNot01) {
+      if (stageKey === "2" && missing.length === 0 && hints.normalizeModeNot01) {
         const lines = [
-          "Nice, you’ve wired in a normalize step, that’s exactly what this stage is about. For this mission, switch the mode to the 0–1 option. The other modes are useful later, just not the one we’re practicing here.",
-          "You’re using a normalization block, which is perfect. To complete this stage, change its mode to 0–1 so pixel values land neatly between 0 and 1.",
-          "Normalization is in the right place, but its mode doesn’t match the stage goal. Pick the 0–1 mode: other modes are valid in real projects, but this exercise wants 0–1 specifically.",
+          "Nice, you’ve wired in normalize, that’s exactly what this stage needs. For this mission, switch the mode to 0–1.",
+          "You’re using a normalization block, which is perfect. To complete Stage 2, change its mode to 0–1 so pixel values land between 0 and 1.",
+          "Normalization is in the right place, but its mode doesn’t match this stage. Pick the 0–1 mode.",
         ];
         setBaymaxState(
           pickLine(lines, stageKey + "-wrong-normalize-mode"),
@@ -1580,25 +1563,9 @@ function updateBaymaxFromChecklist(
       );
     } else if (stageKey === "2") {
       const lines = [
-        "We’re aiming for a clean 150 × 150 landing pad. Make sure the resize step really makes the image 150 × 150, and the padding step uses the same size.",
-        "This mission is all about consistent framing. Check that you both resize to 150×150 and pad to 150×150 so every image lands in the same square.",
-        "Your chain should contain a precise 150×150 resize and a 150×150 pad. If either one is missing or set to a different size, the target image won’t match.",
-      ];
-      setBaymaxState(
-        pickLine(lines, stageKey + "-missing-" + missing.length),
-        "hint",
-        true
-      );
-    } else if (stageKey === "3") {
-      const seqLine = pipelineNextStepHint(s, items);
-      if (seqLine) {
-        setBaymaxState(seqLine, "hint", true);
-        return;
-      }
-      const lines = [
-        "The goal now is to get pixel values into a nice, consistent numeric range. Look for the normalize step and place it toward the end of the chain.",
-        "We’re not changing how the image looks, just how the numbers are scaled. Add the normalization block near the bottom of your preprocessing recipe.",
-        "Stage 3 needs a block that rescales pixel values. For this mission we’re focusing on the 0–1 mode so values end up between 0 and 1.",
+        "We’re aiming for a complete model-ready chain: resize and pad should both be 150 × 150, then normalize should be set to 0–1.",
+        "This mission is about framing and value scaling together. Check resize/pad at 150×150 and add normalize in 0–1 mode.",
+        "Your chain should include 150×150 resize, 150×150 pad, and a normalize step in 0–1. If any part is missing or off, the target won’t match.",
       ];
       setBaymaxState(
         pickLine(lines, stageKey + "-missing-" + missing.length),
@@ -1672,16 +1639,9 @@ function updateBaymaxFromChecklist(
       );
     } else if (stageKey === "2") {
       const lines = [
-        "Perfect 150 × 150 landing pad! Your resize and padding now work together so every image ends up in the same square frame.",
-        "Your framing looks great: every sample should now land in a clean 150×150 window, just like the target.",
-        "Nice work! Your resize and pad combo lock images into the exact square shape this stage is aiming for.",
-      ];
-      setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
-    } else if (stageKey === "3") {
-      const lines = [
-        "Great, your normalization step is in the right place and mode. Pixel values should now live in a stable 0–1 range for this stage.",
-        "Numbers under control: your normalize block and its 0–1 mode give the model a calm, predictable input range.",
-        "Stage 3 complete: your pipeline now ends with a clean normalization step, putting pixel values in the 0–1 range we wanted to practice.",
+        "Perfect: your Stage 2 chain now frames images to 150 × 150 and normalizes to 0–1.",
+        "Great work. Resize and pad are aligned at 150×150, and normalize is set for stable model input.",
+        "Stage 2 complete: framing and normalization are both correct, so your data is model-ready.",
       ];
       setBaymaxState(pickLine(lines, stageKey + "-done"), "success", false);
     } else {
@@ -1761,7 +1721,7 @@ function updateBaymaxFromChecklist(
 
           if (!allOk) {
             lines.push(
-              "• Some preprocessing steps are missing, out of order, or have settings that don’t match this stage’s goal. Compare your output to the target image and follow Baymax’s hints. For example, stages that resize and pad want both at 150×150, and Stage 3 wants normalize in the 0–1 mode."
+              "• Some preprocessing steps are missing, out of order, or have settings that don’t match this stage’s goal. Compare your output to the target image and follow Baymax’s hints. For Stage 2, resize and pad should be 150×150 and normalize should use 0–1 mode."
             );
           }
         }
@@ -1856,14 +1816,9 @@ function updateBaymaxFromChecklist(
           setSubmitTitle("Stage 1 Complete - Preprocessing chain ready");
           setSubmitLines(["✓ Your grayscale and cleanup pipeline is in place."]);
         } else if (stageKey === "2") {
-          setSubmitTitle("Stage 2 Complete - Frame locked in");
+          setSubmitTitle("Stage 2 Complete - Frame + Normalize locked in");
           setSubmitLines([
-            "✓ Your pipeline now shapes images into a consistent square space without weird stretching.",
-          ]);
-        } else if (stageKey === "3") {
-          setSubmitTitle("Stage 3 Complete - Numbers under control");
-          setSubmitLines([
-            "✓ You normalized pixel values into a stable range, which helps training behave nicely later.",
+            "✓ Your pipeline now shapes images into a consistent 150×150 frame and normalizes values to 0–1.",
           ]);
         } else if (stageKey === "bonus") {
           setSubmitTitle("Bonus Stage Complete - Edge detective");
@@ -1903,10 +1858,7 @@ function updateBaymaxFromChecklist(
             "You’re close to a full automation pipeline. Make sure the loop body looks like a mini preprocessing chain with the same 150×150 frame as before, and that an export dataset block sits right after the loop to save the results.";
         } else if (stageKey === "2") {
           failLine =
-            "You’re not far off. You’re using the right kinds of blocks—now match the exact frame by setting both resize and pad to 150 × 150, then compare your output to the target image.";
-        } else if (stageKey === "3") {
-          failLine =
-            "You’re close. Double-check your resize/pad values (150 × 150) and your normalize block: for this stage, switch its mode to 0–1 so values end up between 0 and 1.";
+            "You’re not far off. Set resize and pad to 150 × 150, then make sure normalize is in 0–1 mode to match this merged stage.";
         } else if (stageKey === "1") {
           failLine =
             "You’re close. Make sure the Stage 1 preprocessing chain is complete and in a sensible order before submitting.";
