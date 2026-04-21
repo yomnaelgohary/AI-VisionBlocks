@@ -8,25 +8,19 @@ export default function Module4Index() {
   const stages = [
     {
       id: "1",
-      title: "Stage 1: Train / Test Split",
+      title: "Stage 1: Split Data & Build a CNN",
       short:
-        "Split your dataset into TRAIN and TEST so the model learns from one part and is checked on another.",
+        "Create the split pipeline and build your first CNN in one connected mission: split, model init, conv/pool, dense, summary.",
     },
     {
       id: "2",
-      title: "Stage 2: Build a CNN model",
-      short:
-        "Design a simple CNN with conv, pooling, and dense layers that can read your preprocessed images.",
-    },
-    {
-      id: "3",
-      title: "Stage 3: Train the model",
+      title: "Stage 2: Train the model",
       short:
         "Set training hyperparameters and watch how loss and accuracy change as the model learns.",
     },
     {
-      id: "4",
-      title: "Stage 4: Evaluate & Predict",
+      id: "3",
+      title: "Stage 3: Evaluate & Predict",
       short:
         "Evaluate on the TEST split, then ask the model to classify individual images to see how it behaves.",
     },
@@ -89,8 +83,8 @@ export default function Module4Index() {
 
         <p className="text-gray-600 mt-4 text-base md:text-lg max-w-3xl">
           In Module 3, you’ll turn your processed datasets into working neural networks.
-          You’ll split data into TRAIN and TEST, design a CNN with blocks, train it,
-          and then evaluate it honestly with test metrics and single-image predictions.
+          You’ll first merge split and model-building into one stage, then train,
+          and finally evaluate with test metrics and single-image predictions.
         </p>
 
         {/* Stage grid */}
@@ -167,7 +161,7 @@ export default function Module4Index() {
       </main>
 
       {/* Global background animation */}
-      <style jsx global>{`
+      <style>{`
         .animated-bg {
           background: radial-gradient(circle at 20% 20%, #4ba3e480, transparent 65%),
             radial-gradient(circle at 80% 20%, #8b6ff680, transparent 65%),

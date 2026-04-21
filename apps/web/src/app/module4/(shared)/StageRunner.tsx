@@ -86,6 +86,18 @@ type SampleResp = {
   path: string;
 };
 
+type AnalyzerBlock = { type: string; fields: Record<string, unknown> };
+type AnalyzerChain = { top_block_type: string | null; blocks: AnalyzerBlock[] };
+type AnalyzeAgentReq = {
+  chains: AnalyzerChain[];
+  client_signature?: string;
+  stage_id?: string;
+};
+type AnalyzeAgentResp = {
+  analyzer: { signature: string };
+  agent_text: string;
+};
+
 /* ----------------- Basic block helpers ----------------- */
 
 function getAllBlocks(ws: WorkspaceSvg | null): BlocklyBlock[] {
@@ -108,6 +120,31 @@ function walkChain(top: BlocklyBlock | null): BlocklyBlock[] {
     chain.push(b);
   }
   return chain;
+}
+
+function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
+  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+  const chains: BlocklyBlock[][] = [];
+  for (const top of tops) {
+    const chain: BlocklyBlock[] = [];
+    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
+      chain.push(b);
+    }
+    chains.push(chain);
+  }
+  return chains;
+}
+
+function blockToAnalyzerModel(b: BlocklyBlock): AnalyzerBlock {
+  const fields: Record<string, unknown> = {};
+  for (const input of b.inputList || []) {
+    for (const field of input.fieldRow || []) {
+      const name = (field as any).name as string | undefined;
+      if (!name) continue;
+      fields[name] = (field as any).getValue?.() ?? (field as any).getText?.();
+    }
+  }
+  return { type: b.type, fields };
 }
 
 /**
@@ -371,7 +408,7 @@ function getTrainPct(ws: WorkspaceSvg | null): number | null {
     splitBlock.getFieldValue("TRAIN_PERCENT"),
   ];
 
-  let raw: string | number | undefined = candidates.find(
+  let raw: string | number | null | undefined = candidates.find(
     (v) => v !== null && v !== undefined && String(v).trim() !== ""
   );
 
@@ -450,6 +487,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
   const [baymaxBump, setBaymaxBump] = useState(false);
   const lastBaymaxTextRef = useRef<string>("");
+  const [aiAssistantText, setAiAssistantText] = useState<string>(
+    "LLM assistant is waiting for your Stage 1 edits..."
+  );
+  const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTitle, setInfoTitle] = useState<string>();
@@ -462,6 +503,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   const [canGoNext, setCanGoNext] = useState(false);
   const [checkItems, setCheckItems] = useState<StageChecklistItem[]>([]);
+  const m4AgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const m4AgentTokenRef = useRef(0);
+  const m4AgentSigRef = useRef("");
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
   useEffect(() => {
@@ -560,12 +604,64 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     });
   }
 
+  function requestStageAgentHintDebounced(ws: WorkspaceSvg) {
+    if (!stage || String(stage.id) !== "1") return;
+
+    if (m4AgentTimerRef.current) clearTimeout(m4AgentTimerRef.current);
+    m4AgentTimerRef.current = setTimeout(async () => {
+      const chains = getTopChains(ws).map((chain): AnalyzerChain => ({
+        top_block_type: chain[0]?.type || null,
+        blocks: chain.map((b) => blockToAnalyzerModel(b)),
+      }));
+
+      const payload: AnalyzeAgentReq = {
+        chains,
+        stage_id: "1",
+        client_signature: "module4-stage1-live",
+      };
+
+      const sig = JSON.stringify(payload);
+      if (sig === m4AgentSigRef.current) return;
+      m4AgentSigRef.current = sig;
+      const myToken = ++m4AgentTokenRef.current;
+
+      try {
+        setAiAssistantLoading(true);
+        const resp = await fetchJSON<AnalyzeAgentResp>(`${API_BASE}/analyze/module4/agent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (myToken !== m4AgentTokenRef.current) return;
+        const text = (resp.agent_text || "").trim();
+        if (!text) return;
+        setAiAssistantText(text);
+      } catch (e: any) {
+        if (myToken !== m4AgentTokenRef.current) return;
+        const msg = (e?.message || "Request failed").toString();
+        setAiAssistantText(`LLM error: ${msg}`);
+      } finally {
+        if (myToken === m4AgentTokenRef.current) {
+          setAiAssistantLoading(false);
+        }
+      }
+    }, 450);
+  }
+
   /* ---------- Blockly inject + listeners ---------- */
   useEffect(() => {
     if (!stage || !blocklyDivRef.current) return;
 
     setLogs([]);
     setCanGoNext(false);
+    m4AgentSigRef.current = "";
+    setAiAssistantLoading(false);
+    setAiAssistantText(
+      String(stage.id) === "1"
+        ? "LLM assistant is waiting for your Stage 1 edits..."
+        : "LLM assistant is available for Stage 1 only."
+    );
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule4,
@@ -603,6 +699,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         setCheckItems(items);
         updateToolboxGlow();
         updateBaymaxFromChecklist(stage, items);
+        requestStageAgentHintDebounced(workspaceRef.current);
       }, 150);
     };
     ws.addChangeListener(onChange);
@@ -613,6 +710,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     updateBaymaxFromChecklist(stage, initialItems, true);
 
     return () => {
+      if (m4AgentTimerRef.current) clearTimeout(m4AgentTimerRef.current);
       window.removeEventListener("vb:blockInfo", onInfo as any);
       ws.removeChangeListener(onChange);
       ws.dispose();
@@ -1385,6 +1483,23 @@ function updateBaymaxFromChecklist(
                   dark={false}
                 />
               </div>
+
+              {String(stage.id) === "1" && (
+                <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-fuchsia-200 bg-fuchsia-100 text-fuchsia-700">
+                      LLM
+                    </span>
+                  </div>
+                  <p className="text-xs leading-relaxed text-fuchsia-900/90">
+                    {aiAssistantText}
+                  </p>
+                  {aiAssistantLoading && (
+                    <div className="mt-2 text-[11px] text-fuchsia-600">Thinking...</div>
+                  )}
+                </div>
+              )}
 
               <div className="flex-1 min-h-0">
                 <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />

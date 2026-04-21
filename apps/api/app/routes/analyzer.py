@@ -79,6 +79,7 @@ class _Module2StageHistory(BaseModel):
 
 
 _M2_STAGE_HISTORY: Dict[str, _Module2StageHistory] = {}
+_M4_STAGE_HISTORY: Dict[str, _Module2StageHistory] = {}
 
 
 REQUIRED_ORDER = [
@@ -924,6 +925,178 @@ def _analyze_module2_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[s
         "full_chain": chain_types,
         "expected_order": required_order,
     }
+
+
+M4_STAGE1_REQUIRED_ORDER = [
+    "dataset.select",
+    "m3.set_split_ratio",
+    "m3.apply_split",
+    "m4.model_init",
+    "m4.layer_conv2d",
+    "m4.layer_pool",
+    "m4.layer_dense",
+    "m4.model_summary",
+]
+
+
+def _analyze_module4_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
+    primary_chain = _find_primary_chain(req)
+    chain_blocks = primary_chain.blocks if primary_chain else []
+    chain_types = [b.type for b in chain_blocks]
+
+    expected = M4_STAGE1_REQUIRED_ORDER
+    found = [t for t in chain_types if t in expected]
+    missing = [t for t in expected if t not in found]
+    unexpected = [t for t in chain_types if t.startswith("m3.") or t.startswith("m4.") or t.startswith("dataset.")]
+    unexpected = [t for t in unexpected if t not in expected and t != "dataset.sample_image"]
+
+    order_wrong = False
+    idxs: Dict[str, int] = {}
+    for t in expected:
+        if t in chain_types:
+            idxs[t] = chain_types.index(t)
+    last = -1
+    for t in expected:
+        if t in idxs:
+            if idxs[t] <= last:
+                order_wrong = True
+                break
+            last = idxs[t]
+
+    if len(unexpected) == 0 and len(missing) == 0 and not order_wrong:
+        problem_type = "complete"
+    elif unexpected:
+        problem_type = "wrong_block"
+    elif order_wrong:
+        problem_type = "wrong_order"
+    else:
+        problem_type = "missing"
+
+    return {
+        "problem_type": problem_type,
+        "next_missing": missing[0] if missing else None,
+        "wrong_block": unexpected[-1] if unexpected else None,
+        "full_chain": chain_types,
+        "expected_order": expected,
+    }
+
+
+@router.post("/analyze/module4", response_model=AnalyzeResponse)
+def analyze_module4(req: AnalyzeRequest):
+    canonical = json.dumps(json.loads(req.json()), sort_keys=True, separators=(",", ":"))
+    sig = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    stage_id = str(req.stage_id or "1")
+    checklist: List[ChecklistItem] = []
+
+    if stage_id == "1":
+        primary_chain = _find_primary_chain(req)
+        chain_types = [b.type for b in primary_chain.blocks] if primary_chain else []
+
+        last = -1
+        for t in M4_STAGE1_REQUIRED_ORDER:
+            label = t.replace("m3.", "").replace("m4.", "").replace("dataset.", "")
+            if t not in chain_types:
+                state = "missing"
+            else:
+                idx = chain_types.index(t)
+                state = "ok" if idx > last else "wrong_place"
+                if state == "ok":
+                    last = idx
+            checklist.append(ChecklistItem(key=t, label=label, state=state))
+
+    return AnalyzeResponse(signature=sig, chains=req.chains, checklist=checklist, planned_actions=[])
+
+
+@router.post("/analyze/module4/agent", response_model=AnalyzeAgentResponse)
+def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
+    analyzer = analyze_module4(req)
+    stage_id = str(req.stage_id or "1")
+    if stage_id != "1":
+        return AnalyzeAgentResponse(
+            analyzer=analyzer,
+            agent_text="Stage analyzer is currently enabled for Module 4 Stage 1 only.",
+        )
+
+    now = time.time()
+    key = _history_key(req, request) + ":module4-stage1"
+    history = _M4_STAGE_HISTORY.get(key) or _Module2StageHistory()
+    problem = _analyze_module4_stage1_problem(req)
+
+    problem_key = (
+        f"{problem['problem_type']}|missing={problem['next_missing']}|"
+        f"wrong={problem['wrong_block']}|chain={' -> '.join(problem['full_chain'])}"
+    )
+
+    if problem["problem_type"] == "complete":
+        history.repeat_count = 0
+        history.last_problem_key = None
+    elif history.last_problem_key == problem_key:
+        history.repeat_count += 1
+    else:
+        history.repeat_count = 0
+
+    history.last_problem_key = problem_key
+    history.last_seen = now
+
+    chain_text = " -> ".join(problem["full_chain"]) or "empty"
+    expected_text = " -> ".join(problem["expected_order"])
+    common_context = (
+        f"\n\nCurrent chain: {chain_text}. "
+        f"Expected stage order: {expected_text}. "
+        f"Problem type: {problem['problem_type']}. "
+        f"Next missing: {problem['next_missing']}. "
+        f"Wrong block: {problem['wrong_block']}. "
+        f"Repeat count: {history.repeat_count}."
+    )
+
+    if problem["problem_type"] == "complete":
+        prompt = (
+            "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+            "The student completed split and model-build flow correctly. "
+            "Respond in 1-2 short encouraging sentences and suggest pressing Submit and moving to next stage."
+        ) + common_context
+    elif problem["problem_type"] == "wrong_order":
+        if history.repeat_count >= 1:
+            prompt = (
+                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+                "Student keeps repeating order mistakes. "
+                "State the correct sequence clearly and briefly explain why split must come before model layers. "
+                "Use 2 short sentences, no bullets."
+            ) + common_context
+        else:
+            prompt = (
+                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+                "Order is wrong. Give a gentle hint about fixing sequence from split to model summary without listing extra details. "
+                "Use 2 short sentences, no bullets."
+            ) + common_context
+    elif problem["problem_type"] == "wrong_block":
+        prompt = (
+            "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+            "Student placed a block that does not belong to this stage flow. "
+            "Give a clear but friendly hint to remove that block and continue with split then model-build blocks only. "
+            "Use 2 short sentences, no bullets."
+        ) + common_context
+    else:
+        if history.repeat_count >= 1:
+            prompt = (
+                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+                "The same required step is still missing. "
+                "Be more direct and name the next missing block and where it should appear in the chain. "
+                "Use 2 short sentences, no bullets."
+            ) + common_context
+        else:
+            prompt = (
+                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
+                "A required step is missing. Give one hint about the next missing step, concise and supportive. "
+                "Use 2 short sentences, no bullets."
+            ) + common_context
+
+    agent_text = _call_openrouter(prompt)
+    history.last_hint = agent_text
+    _M4_STAGE_HISTORY[key] = history
+
+    return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
 
 
 @router.post("/analyze/module2/agent", response_model=AnalyzeAgentResponse)
