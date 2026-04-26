@@ -14,15 +14,9 @@ export default function Module4Index() {
     },
     {
       id: "2",
-      title: "Stage 2: Train the model",
+      title: "Stage 2: Train, Evaluate & Predict",
       short:
-        "Set training hyperparameters and watch how loss and accuracy change as the model learns.",
-    },
-    {
-      id: "3",
-      title: "Stage 3: Evaluate & Predict",
-      short:
-        "Evaluate on the TEST split, then ask the model to classify individual images to see how it behaves.",
+        "Set training hyperparameters, train your model, then evaluate on TEST and run single-image predictions in one merged stage.",
     },
   ];
 

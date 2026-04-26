@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ChevronRight, BookOpen, Rocket } from "lucide-react";
+import { ChevronRight, BookOpen } from "lucide-react";
 
 export default function Module2Index() {
   const stages = [
@@ -23,12 +23,6 @@ export default function Module2Index() {
       title: "Stage 3: Looping & Exporting",
       short:
         "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
-    },
-    {
-      id: "bonus",
-      title: "Bonus: Edge Detection",
-      short:
-        "Use edge filters to highlight outlines and structure in your images.",
     },
   ];
 
@@ -97,18 +91,11 @@ export default function Module2Index() {
         {/* Stage grid */}
         <section className="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-10">
           {stages.map((stage, index) => {
-            const isBonus = stage.id === "bonus";
-            const icon = isBonus ? (
-              <Rocket className="w-5 h-5 text-purple-500" />
-            ) : (
-              <BookOpen className="w-5 h-5 text-sky-500" />
-            );
+            const icon = <BookOpen className="w-5 h-5 text-sky-500" />;
 
-            const gradientBg = isBonus
-              ? "from-purple-200/70 via-sky-100/60 to-white/80"
-              : "from-sky-200/70 via-purple-100/60 to-white/80";
+            const gradientBg = "from-sky-200/70 via-purple-100/60 to-white/80";
 
-            const coreLabel = isBonus ? "" : `Core stage ${stage.id}`;
+            const coreLabel = `Core stage ${stage.id}`;
 
             return (
               <motion.div
@@ -119,12 +106,7 @@ export default function Module2Index() {
               >
                 {/* Soft glow behind card */}
                 <div className="absolute inset-0 -z-10 opacity-0 group-hover:opacity-80 transition-opacity duration-300">
-                  <div
-                    className={`
-                      h-full w-full rounded-3xl blur-2xl
-                      ${isBonus ? "bg-purple-300/50" : "bg-sky-300/50"}
-                    `}
-                  />
+                  <div className="h-full w-full rounded-3xl blur-2xl bg-sky-300/50" />
                 </div>
 
                 <Link
@@ -148,17 +130,9 @@ export default function Module2Index() {
                         <h2 className="text-sm font-semibold text-gray-900">
                           {stage.title}
                         </h2>
-                        <p className="text-[11px] text-gray-500">
-                          {isBonus ? "Challenge mission" : coreLabel}
-                        </p>
+                        <p className="text-[11px] text-gray-500">{coreLabel}</p>
                       </div>
                     </div>
-
-                    {isBonus && (
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200">
-                        Bonus
-                      </span>
-                    )}
                   </div>
 
                   {/* Description */}
@@ -170,13 +144,11 @@ export default function Module2Index() {
                   <div className="mt-4 flex items-center justify-between gap-2">
                     <div className="flex flex-col">
                       <span className="text-xs text-gray-500">
-                        {isBonus
-                          ? "Try this after Stage 3"
-                          : "Recommended: follow the stages in order"}
+                        Recommended: follow the stages in order
                       </span>
                     </div>
                     <span className="inline-flex items-center gap-1 text-sm font-semibold text-sky-600 group-hover:text-sky-700">
-                      Start {isBonus ? "bonus stage" : `stage ${stage.id}`}
+                      Start stage {stage.id}
                       <ChevronRight className="w-4 h-4" />
                     </span>
                   </div>
@@ -188,8 +160,7 @@ export default function Module2Index() {
 
         {/* Small footer hint */}
         <p className="text-xs text-gray-500 mt-4">
-          Tip: You can always come back here to replay any stage or jump into the bonus
-          once you’re comfortable with the main pipeline.
+          Tip: You can always come back here to replay any stage once you are comfortable with the main pipeline.
         </p>
       </main>
 

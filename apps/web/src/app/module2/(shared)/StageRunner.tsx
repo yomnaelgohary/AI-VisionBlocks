@@ -1598,17 +1598,6 @@ function updateBaymaxFromChecklist(
         "hint",
         true
       );
-    } else if (stageKey === "bonus") {
-      const lines = [
-        "Bonus time: we’re hunting for outlines. Check that your chain includes an edge-focused step, not just brightness or size tweaks.",
-        "For this bonus mission, we want the structure of the object to pop. Add an edge-detection step so the outlines stand out.",
-        "Look for the block that emphasizes edges and shapes. Without it, this bonus pipeline will behave like an ordinary preprocessing stage.",
-      ];
-      setBaymaxState(
-        pickLine(lines, stageKey + "-missing-" + missing.length),
-        "hint",
-        true
-      );
     } else {
       const lines = [
         "Some of the core steps for this stage are still missing. Check which blocks are glowing in the toolbox and make sure they appear in your main chain.",
@@ -1834,11 +1823,6 @@ function updateBaymaxFromChecklist(
           setSubmitTitle("Stage 2 Complete - Frame + Normalize locked in");
           setSubmitLines([
             "✓ Your pipeline now shapes images into a consistent 150×150 frame and normalizes values to 0–1.",
-          ]);
-        } else if (stageKey === "bonus") {
-          setSubmitTitle("Bonus Stage Complete - Edge detective");
-          setSubmitLines([
-            "✓ You used an edge-focused pipeline to highlight outlines and structure. This is a powerful optional trick for shape-heavy tasks.",
           ]);
         } else {
           setSubmitTitle("Stage Complete!");

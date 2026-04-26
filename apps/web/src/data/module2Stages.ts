@@ -190,31 +190,4 @@ export const module2Stages: StageConfig[] = [
       { type: "pad", w: 150, h: 150, mode: "constant", r: 0, g: 0, b: 0 },
     ],
   },
-
-  // BONUS – Edge Detection (unchanged)
-  {
-    id: "bonus",
-    title: "Bonus: Edge Detection",
-    type: "pipeline",
-    intro: [
-      "Try an edge detector (like Canny) to highlight outlines.",
-      "This is useful for shape-heavy tasks, but not required for every dataset.",
-    ],
-    help: {
-      title: "When Should You Use Edge Detection?",
-      text: `
-    Edge detection highlights where brightness changes sharply, usually object outlines or strong textures.
-
-    It’s useful when:
-    • Shape matters more than color (like signs, symbols, tools).
-    • You want the model to pay attention to boundaries.
-
-    But for natural photos (animals, landscapes, people), edges can remove too much information.
-    So think of edge detection as a special tool, not a default step, in your image toolbox.
-    `.trim(),
-    },
-    requiredBlocks: ["m2.edges"],
-    expectedOrder: ["m2.edges"],
-    targetOps: [{ type: "edges", method: "canny", threshold: 100, overlay: false }],
-  },
 ];

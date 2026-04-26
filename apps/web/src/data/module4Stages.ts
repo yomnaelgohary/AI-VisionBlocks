@@ -103,24 +103,26 @@ export const module4Stages: StageConfig[] = [
   },
 
   // ────────────────────────────────────────────────
-  // STAGE 2 – Train the model
+  // STAGE 2 – Train, evaluate, and predict (merged)
   // ────────────────────────────────────────────────
   {
     id: 2,
-    title: "Stage 2: Train the model",
+    title: "Stage 2: Train, Evaluate & Predict",
     type: "train",
     intro: [
-      "Configure how the model trains (epochs, batch size, learning rate) and start the training loop.",
-      "You’ll see how loss and accuracy change over time as the model learns from the TRAIN split.",
+      "Configure how the model trains (epochs, batch size) and start the training loop.",
+      "Then evaluate on the TEST split and try a single-sample prediction.",
     ],
     help: {
-      title: "What happens during training?",
+      title: "How do training and evaluation fit together?",
       text: `
     Training is the model’s practice session. It sees many labelled images and slowly adjusts itself so it makes fewer mistakes.
 
     • Epochs: how many times the model loops over the entire training set. More epochs = more practice, but too many can lead to overfitting.
 
-    In this stage you keep your model structure the same, then use the training setup and start training blocks. The model will look at the TRAIN split only, and you’ll see accuracy and loss change as it learns.
+    After training, we evaluate on the TEST split and then try a single-sample prediction to see how the model behaves on an individual image.
+
+    In this stage you keep your model structure the same, then add training setup → start training → evaluate on test → get sample image → predict current sample.
     `.trim(),
     },
     requiredBlocks: [
@@ -134,6 +136,9 @@ export const module4Stages: StageConfig[] = [
       "m4.model_summary",
       "m4.train_hparams",
       "m4.train_start",
+      "m4.eval_test",
+      "dataset.sample_image",
+      "m4.predict_sample",
     ],
     expectedOrder: [
       "dataset.select",
@@ -146,68 +151,14 @@ export const module4Stages: StageConfig[] = [
       "m4.model_summary",
       "m4.train_hparams",
       "m4.train_start",
+      "m4.eval_test",
+      "dataset.sample_image",
+      "m4.predict_sample",
     ],
     minConvLayers: 1,
     minPoolLayers: 1,
     minDenseLayers: 1,
     requiresSplit: true,
     requiresTrainedModel: false, // this stage *creates* the trained model
-  },
-
-  // ────────────────────────────────────────────────
-  // STAGE 3 – Evaluate & predict
-  // ────────────────────────────────────────────────
-  {
-    id: 3,
-    title: "Stage 3: Evaluate & Predict",
-    type: "eval_predict",
-    intro: [
-      "Use the TEST split to measure how well your trained model generalizes.",
-      "Then pick individual images and ask the model to predict their class.",
-    ],
-    help: {
-      title: "How do we evaluate the model?",
-      text: `
-    Once the model has finished training, we test it on images it has never seen before. This shows how well it might perform in the real world.
-
-    • Evaluate on test set: runs the model on the TEST split and reports overall accuracy and accuracy per class.
-    • Single-sample prediction: lets you pick one image and see exactly what the model guesses and how confident it is.
-
-    In this stage you connect evaluate → get sample image → predict current sample at the end of your pipeline, so you can both see the big picture (test accuracy) and zoom in on individual predictions.
-    `.trim(),
-    },
-    requiredBlocks: [
-      "dataset.select",
-      "m3.set_split_ratio",
-      "m3.apply_split",
-      "m4.model_init",
-      "m4.layer_conv2d",
-      "m4.layer_pool",
-      "m4.layer_dense",
-      "m4.model_summary",
-      "m4.train_hparams",
-      "m4.train_start",
-      "m4.eval_test",
-      "m4.predict_sample",
-    ],
-    expectedOrder: [
-      "dataset.select",
-      "m3.set_split_ratio",
-      "m3.apply_split",
-      "m4.model_init",
-      "m4.layer_conv2d",
-      "m4.layer_pool",
-      "m4.layer_dense",
-      "m4.model_summary",
-      "m4.train_hparams",
-      "m4.train_start",
-      "m4.eval_test",
-      "m4.predict_sample",
-    ],
-    minConvLayers: 1,
-    minPoolLayers: 1,
-    minDenseLayers: 1,
-    requiresSplit: true,
-    requiresTrainedModel: true,
   },
 ];

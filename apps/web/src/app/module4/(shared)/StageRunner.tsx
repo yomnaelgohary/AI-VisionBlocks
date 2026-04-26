@@ -677,10 +677,38 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       (ws as any).scrollCenter?.();
     } catch {}
 
-    // Seed with "use dataset" only
-    const ds = ws.newBlock("dataset.select");
-    ds.initSvg();
-    ds.render();
+    // Seed workspace based on stage
+    if (String(stage.id) === "2") {
+      // Stage 2: pre-populate with Stage 1 blocks so user only adds training blocks
+      const blocksToCreate = [
+        "dataset.select",
+        "m3.set_split_ratio",
+        "m3.apply_split",
+        "m4.model_init",
+        "m4.layer_conv2d",
+        "m4.layer_pool",
+        "m4.layer_dense",
+        "m4.model_summary",
+      ];
+
+      let previousBlock: BlocklyBlock | null = null;
+      for (const blockType of blocksToCreate) {
+        const newBlock = ws.newBlock(blockType);
+        newBlock.initSvg();
+
+        if (previousBlock && previousBlock.nextConnection && newBlock.previousConnection) {
+          previousBlock.nextConnection.connect(newBlock.previousConnection);
+        }
+
+        newBlock.render();
+        previousBlock = newBlock;
+      }
+    } else {
+      // All other stages: just start with "use dataset"
+      const ds = ws.newBlock("dataset.select");
+      ds.initSvg();
+      ds.render();
+    }
 
     // Info events
     const onInfo = (e: any) => {
@@ -827,6 +855,7 @@ function updateBaymaxFromChecklist(
   const missing = items.filter((i) => i.state === "missing");
   const wrong = items.filter((i) => i.state === "wrong_place");
   const stageKey = String(s.id);
+  const isMergedStage = stageKey === "2";
 
   if (initial) {
     const introLine =
@@ -871,6 +900,11 @@ function updateBaymaxFromChecklist(
   if (missing.length > 0) {
     const names = missing.map((m) => m.label).join(", ");
 
+    const mergedLines = [
+      `This merged stage still needs: ${names}. Add them after the model summary so you can train → evaluate → sample → predict.`,
+      "After model summary, the flow should be: training setup → start training → evaluate on test set → get sample image → predict current sample.",
+    ];
+
     const linesByStage: Record<string, string[]> = {
       split: [
         `We still need the split steps: ${names}. Place them right after “use dataset”.`,
@@ -890,10 +924,12 @@ function updateBaymaxFromChecklist(
       ],
     };
 
-    const stageLines = linesByStage[s.type] || [
-      `You’re still missing: ${names}. Add them into the main chain in their proper places.`,
-      "Some stage blocks are still missing from your pipeline. Use the ordering story in the stage text as a guide.",
-    ];
+    const stageLines = isMergedStage
+      ? mergedLines
+      : linesByStage[s.type] || [
+          `You’re still missing: ${names}. Add them into the main chain in their proper places.`,
+          "Some stage blocks are still missing from your pipeline. Use the ordering story in the stage text as a guide.",
+        ];
 
     setBaymaxState(
       pickLine(stageLines, stageKey + "-missing"),
@@ -905,6 +941,11 @@ function updateBaymaxFromChecklist(
 
   // --- All checklist items structurally OK ---
   if (done === total && total > 0) {
+    const mergedComplete = [
+      "Great! Your merged pipeline is ready: train → evaluate → sample → predict. Submit & Run to see all results.",
+      "Everything is in place to train, evaluate, and predict. You’re ready to run this full pipeline.",
+    ];
+
     const completeByStage: Record<string, string[]> = {
       split: [
         "Nice, you’ve built a proper split pipeline. Submit & Run will divide the dataset into train and test sets.",
@@ -924,10 +965,11 @@ function updateBaymaxFromChecklist(
       ],
     };
 
-    const finalLines =
-      completeByStage[s.type] || [
-        "All the blocks this stage cares about are present and in the right order. You’re good to Submit & Run.",
-      ];
+    const finalLines = isMergedStage
+      ? mergedComplete
+      : completeByStage[s.type] || [
+          "All the blocks this stage cares about are present and in the right order. You’re good to Submit & Run.",
+        ];
 
     setBaymaxState(pickLine(finalLines, stageKey + "-ok"), "success", false);
     return;
@@ -1011,7 +1053,11 @@ function updateBaymaxFromChecklist(
           eval_predict: "Stage Complete – Evaluation and prediction",
         };
 
-        setSubmitTitle(titleByType[stage.type] || "Stage Complete");
+        if (String(stage.id) === "2") {
+          setSubmitTitle("Stage Complete – Train, evaluate, predict");
+        } else {
+          setSubmitTitle(titleByType[stage.type] || "Stage Complete");
+        }
         setSubmitLines(["✓ All required blocks ran successfully for this stage."]);
         setLogs((prev) => [...prev, ...newLogs]);
 

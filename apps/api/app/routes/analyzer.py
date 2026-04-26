@@ -313,11 +313,14 @@ def _call_openrouter(prompt: str) -> str:
     model = os.getenv("OPENROUTER_MODEL", "gpt-4o-mini")
     url = os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1/chat/completions")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
+    chat_payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # Some OpenRouter providers/models still validate against prompt-style input.
-        # Sending both keeps chat models working while satisfying stricter adapters.
+        "max_tokens": 64,
+        "temperature": 0.2,
+    }
+    prompt_payload = {
+        "model": model,
         "prompt": prompt,
         "max_tokens": 64,
         "temperature": 0.2,
@@ -328,7 +331,7 @@ def _call_openrouter(prompt: str) -> str:
 
     for attempt in range(max_attempts):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            resp = requests.post(url, headers=headers, json=chat_payload, timeout=60)
         except requests.RequestException as exc:
             last_error = exc
         else:
@@ -342,12 +345,36 @@ def _call_openrouter(prompt: str) -> str:
                     resp.raise_for_status()
                 except requests.HTTPError as exc:
                     detail_text = ""
+                    parsed: Dict[str, Any] = {}
                     try:
-                        payload = resp.json()
-                        if isinstance(payload, dict):
-                            detail_text = payload.get("error", {}).get("message") or payload.get("message") or ""
+                        parsed = resp.json()
+                        if isinstance(parsed, dict):
+                            detail_text = parsed.get("error", {}).get("message") or parsed.get("message") or ""
                     except Exception:
                         detail_text = (resp.text or "")[:400]
+
+                    # Some provider routes behind OpenRouter reject chat shape for certain models.
+                    # Retry once with prompt-only payload when the error explicitly asks for prompt/messages.
+                    requires_alt_shape = (
+                        status_code == 400
+                        and isinstance(detail_text, str)
+                        and "prompt" in detail_text.lower()
+                        and "messages" in detail_text.lower()
+                    )
+                    if requires_alt_shape:
+                        try:
+                            alt = requests.post(url, headers=headers, json=prompt_payload, timeout=60)
+                            alt.raise_for_status()
+                            alt_data = alt.json()
+                            if isinstance(alt_data, dict) and alt_data.get("choices"):
+                                msg = alt_data["choices"][0].get("message") or {}
+                                if isinstance(msg, dict):
+                                    return msg.get("content") or ""
+                                text = alt_data["choices"][0].get("text")
+                                return text or ""
+                        except requests.RequestException:
+                            pass
+
                     status_code = resp.status_code if resp.status_code >= 400 else 502
                     last_error = HTTPException(
                         status_code=status_code,
