@@ -609,6 +609,113 @@ M2_STAGE2_REQUIRED_FIELDS: Dict[str, Dict[str, Any]] = {
     "m2.normalize": {"MODE": "zero_one"},
 }
 
+_M2_FRIENDLY_BLOCK_NAMES: Dict[str, str] = {
+    "m2.to_grayscale": "grayscale",
+    "m2.brightness_contrast": "brightness and contrast",
+    "m2.blur_sharpen": "blur and sharpen",
+    "m2.resize": "resize",
+    "m2.pad": "pad",
+    "m2.normalize": "normalize",
+    "m2.loop_dataset": "loop",
+    "m2.export_dataset": "export",
+    "m2.edges": "edge detection",
+    "m2.crop_center": "center crop",
+    "m2.sample_image": "sample image",
+}
+
+_M2_FRIENDLY_FIELD_NAMES: Dict[str, str] = {
+    "B": "brightness",
+    "C": "contrast",
+    "BLUR": "blur",
+    "SHARP": "sharpen",
+    "MODE": "mode",
+    "W": "width",
+    "H": "height",
+    "MAXSIDE": "max side",
+    "PCT": "percent",
+    "R": "red",
+    "G": "green",
+    "KEEP": "keep aspect ratio",
+    "THRESH": "threshold",
+    "OVERLAY": "overlay",
+    "N": "count",
+    "SUBSET": "subset",
+    "NAME": "name",
+    "OVERWRITE": "overwrite",
+    "K": "step",
+}
+
+
+def _friendly_m2_block_name(block_type: str) -> str:
+    return _M2_FRIENDLY_BLOCK_NAMES.get(block_type, block_type.replace("m2.", "").replace("_", " "))
+
+
+def _friendly_m2_field_name(field_name: str) -> str:
+    return _M2_FRIENDLY_FIELD_NAMES.get(field_name, field_name.lower())
+
+
+def _friendly_m2_validation_errors(validation_errors: List[str]) -> List[str]:
+    friendly_errors: List[str] = []
+    for error in validation_errors:
+        if " should be " not in error:
+            friendly_errors.append(error)
+            continue
+
+        left, expected = error.split(" should be ", 1)
+        block_type = left
+        field_name = ""
+        if "." in left:
+            block_type, field_name = left.rsplit(".", 1)
+
+        block_name = _friendly_m2_block_name(block_type)
+        friendly_field = _friendly_m2_field_name(field_name)
+
+        if block_type == "m2.brightness_contrast" and field_name in {"B", "C"}:
+            friendly_errors.append(f"{friendly_field} should be {expected}")
+        elif block_type == "m2.blur_sharpen" and field_name in {"BLUR", "SHARP"}:
+            friendly_errors.append(f"{friendly_field} should be {expected}")
+        elif block_type == "m2.resize" and field_name in {"W", "H"}:
+            friendly_errors.append(f"{friendly_field} should be {expected}")
+        elif block_type == "m2.pad" and field_name in {"W", "H"}:
+            friendly_errors.append(f"{friendly_field} should be {expected}")
+        else:
+            friendly_errors.append(f"{block_name} {friendly_field} should be {expected}".strip())
+    return friendly_errors
+
+
+def _sanitize_m2_agent_text(text: str) -> str:
+    sanitized = text
+
+    replacements = [
+        ("m2.brightness_contrast", "brightness and contrast"),
+        ("m2.blur_sharpen", "blur and sharpen"),
+        ("m2.to_grayscale", "grayscale"),
+        ("m2.resize", "resize"),
+        ("m2.pad", "pad"),
+        ("m2.normalize", "normalize"),
+        ("m2.loop_dataset", "loop"),
+        ("m2.export_dataset", "export"),
+        ("m2.edges", "edge detection"),
+        ("m2.crop_center", "center crop"),
+        ("m2.sample_image", "sample image"),
+    ]
+
+    for raw, friendly in replacements:
+        sanitized = sanitized.replace(raw, friendly)
+
+    sanitized = sanitized.replace(".B", " brightness").replace(".C", " contrast")
+    sanitized = sanitized.replace(".BLUR", " blur").replace(".SHARP", " sharpen")
+    sanitized = sanitized.replace(".W", " width").replace(".H", " height")
+    sanitized = sanitized.replace(".MAXSIDE", " max side")
+    sanitized = sanitized.replace(".PCT", " percent")
+    sanitized = sanitized.replace(".MODE", " mode")
+    sanitized = sanitized.replace(".THRESH", " threshold")
+    sanitized = sanitized.replace(".OVERLAY", " overlay")
+    sanitized = sanitized.replace(".SUBSET", " subset")
+    sanitized = sanitized.replace(".NAME", " name")
+
+    return sanitized
+
 
 def _find_primary_chain(req: AnalyzeRequest) -> Optional[ChainModel]:
     for ch in req.chains:
@@ -1215,6 +1322,24 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
             f"Repeat count for same mistake: {history.repeat_count}."
         )
 
+    # Deterministic parameter guidance to avoid LLM hallucinated values.
+    if problem_type == "invalid_params" and validation_errors:
+        exact_values = "; ".join(_friendly_m2_validation_errors(validation_errors))
+        if stage_id == "3":
+            agent_text = (
+                "Your block order is correct, but some parameter values in the loop body are off. "
+                f"Set these exact values: {exact_values}."
+            )
+        else:
+            agent_text = (
+                "Your block order is correct, but some parameter values are off. "
+                f"Set these exact values: {exact_values}."
+            )
+        agent_text = _sanitize_m2_agent_text(agent_text)
+        history.last_hint = agent_text
+        _M2_STAGE_HISTORY[key] = history
+        return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
+
     if problem_type == "complete":
         prompt = (
             f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
@@ -1268,6 +1393,8 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "The student has the right blocks in the right order but wrong parameter values. "
                 "Be explicit now: name the exact block fields and the exact values to set. "
+                "Use ONLY values that appear in Validation details. Never invent ranges or alternate numbers. "
+                "If Validation details includes m2.brightness_contrast.B/C, copy those values exactly. "
                 "Respond in 2-3 short sentences, no bullets, clear and friendly."
             ) + common_context
         else:
@@ -1275,6 +1402,8 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 f"You are Baymax-style tutor for VisionBlocks Module 2 {stage_label}. "
                 "The student has the right blocks in the right order but parameter values are off. "
                 "Give one concrete hint about which block values need adjustment, without dumping a long checklist. "
+                "Use ONLY values that appear in Validation details. Never invent ranges or alternate numbers. "
+                "If Validation details includes m2.brightness_contrast.B/C, copy those values exactly. "
                 "Respond in 2-3 short sentences, no bullets."
             ) + common_context
     else:
@@ -1353,6 +1482,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
             ) + common_context
 
     agent_text = _call_openrouter(prompt)
+    agent_text = _sanitize_m2_agent_text(agent_text)
     history.last_hint = agent_text
     _M2_STAGE_HISTORY[key] = history
 
