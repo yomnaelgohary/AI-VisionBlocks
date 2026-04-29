@@ -340,20 +340,93 @@ function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
 function paramMismatch(block: BlocklyBlock | null, spec?: OpSpec): boolean {
   if (!block || !spec) return false;
 
-  // Stages that care about a true 150×150 resize & pad
   if (spec.type === "resize") {
     const mode = block.getFieldValue("MODE");
-    if (mode !== "size") return true;
+    if (spec.mode && mode !== spec.mode) return true;
 
-    const w = Number(block.getFieldValue("W") || 0);
-    const h = Number(block.getFieldValue("H") || 0);
-    return !(w === 150 && h === 150);
+    if (spec.w !== undefined) {
+      const w = Number(block.getFieldValue("W") || 0);
+      if (w !== spec.w) return true;
+    }
+
+    if (spec.h !== undefined) {
+      const h = Number(block.getFieldValue("H") || 0);
+      if (h !== spec.h) return true;
+    }
+
+    if (spec.maxside !== undefined) {
+      const maxside = Number(block.getFieldValue("MAXSIDE") || 0);
+      if (maxside !== spec.maxside) return true;
+    }
+
+    if (spec.keep !== undefined) {
+      const keep = block.getFieldValue("KEEP");
+      if (keep !== spec.keep) return true;
+    }
+
+    return false;
   }
 
   if (spec.type === "pad") {
-    const w = Number(block.getFieldValue("W") || 0);
-    const h = Number(block.getFieldValue("H") || 0);
-    return !(w === 150 && h === 150);
+    if (spec.w !== undefined) {
+      const w = Number(block.getFieldValue("W") || 0);
+      if (w !== spec.w) return true;
+    }
+
+    if (spec.h !== undefined) {
+      const h = Number(block.getFieldValue("H") || 0);
+      if (h !== spec.h) return true;
+    }
+
+    if (spec.mode !== undefined) {
+      const mode = block.getFieldValue("MODE");
+      if (mode !== spec.mode) return true;
+    }
+
+    if (spec.r !== undefined) {
+      const r = Number(block.getFieldValue("R") || 0);
+      if (r !== spec.r) return true;
+    }
+
+    if (spec.g !== undefined) {
+      const g = Number(block.getFieldValue("G") || 0);
+      if (g !== spec.g) return true;
+    }
+
+    if (spec.b !== undefined) {
+      const b = Number(block.getFieldValue("B") || 0);
+      if (b !== spec.b) return true;
+    }
+
+    return false;
+  }
+
+  if (spec.type === "brightness_contrast") {
+    if (spec.b !== undefined) {
+      const b = Number(block.getFieldValue("B") || 0);
+      if (b !== spec.b) return true;
+    }
+
+    if (spec.c !== undefined) {
+      const c = Number(block.getFieldValue("C") || 0);
+      if (c !== spec.c) return true;
+    }
+
+    return false;
+  }
+
+  if (spec.type === "blur_sharpen") {
+    if (spec.blur !== undefined) {
+      const blur = Number(block.getFieldValue("BLUR") || 0);
+      if (blur !== spec.blur) return true;
+    }
+
+    if (spec.sharp !== undefined) {
+      const sharp = Number(block.getFieldValue("SHARP") || 0);
+      if (sharp !== spec.sharp) return true;
+    }
+
+    return false;
   }
 
   if (spec.type === "normalize") {
@@ -551,7 +624,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   function requestStageAgentHintDebounced(ws: WorkspaceSvg) {
     if (!stage) return;
     const sid = String(stage.id);
-    if (sid !== "1" && sid !== "2" && sid !== "3") return;
+    if (sid !== "1" && sid !== "2" && sid !== "3" && sid !== "4") return;
 
     if (m2AgentTimerRef.current) clearTimeout(m2AgentTimerRef.current);
     m2AgentTimerRef.current = setTimeout(async () => {
@@ -632,7 +705,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         ? "LLM assistant is waiting for your Stage 1 edits..."
         : String(stage.id) === "2"
         ? "LLM assistant is waiting for your Stage 2 edits..."
-        : "LLM assistant is waiting for your Stage 3 edits..."
+        : String(stage.id) === "3"
+        ? "LLM assistant is waiting for your Stage 3 edits..."
+        : String(stage.id) === "4"
+        ? "LLM assistant is waiting for your quiz attempt..."
+        : ""
     );
 
     const ws = Blockly.inject(blocklyDivRef.current, {
@@ -666,7 +743,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
       // Stage 2 starts with Stage 1 preprocessing chain already connected.
       // Student only needs to add resize + pad (with the correct 150x150 settings).
-      if (String(stage.id) === "2") {
+      if (String(stage.id) === "2" || String(stage.id) === "4") {
         const gray = ws.newBlock("m2.to_grayscale");
         gray.initSvg();
         gray.render();
@@ -692,6 +769,33 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         }
         if (bc.nextConnection && bs.previousConnection) {
           bc.nextConnection.connect(bs.previousConnection);
+        }
+
+        if (String(stage.id) === "4") {
+          const resize = ws.newBlock("m2.resize");
+          resize.initSvg();
+          resize.setFieldValue("size", "MODE");
+          resize.setFieldValue("150", "W");
+          resize.setFieldValue("256", "H");
+          resize.setFieldValue("TRUE", "KEEP");
+          resize.render();
+
+          const pad = ws.newBlock("m2.pad");
+          pad.initSvg();
+          pad.setFieldValue("150", "W");
+          pad.setFieldValue("150", "H");
+          pad.setFieldValue("constant", "MODE");
+          pad.setFieldValue("0", "R");
+          pad.setFieldValue("0", "G");
+          pad.setFieldValue("0", "B");
+          pad.render();
+
+          if (bs.nextConnection && resize.previousConnection) {
+            bs.nextConnection.connect(resize.previousConnection);
+          }
+          if (resize.nextConnection && pad.previousConnection) {
+            resize.nextConnection.connect(pad.previousConnection);
+          }
         }
       }
 
@@ -1587,6 +1691,17 @@ function updateBaymaxFromChecklist(
         "hint",
         true
       );
+    } else if (stageKey === "4") {
+      const lines = [
+        "This is a quiz stage, so the chain is already there except for one missing block. Look for normalize at the end.",
+        "You’ve already got the Stage 1 and Stage 2 blocks. Now add the missing normalize block to finish the chain.",
+        "The clue is at the end of the pipeline: resize, then pad, then normalize. One of those steps is still missing.",
+      ];
+      setBaymaxState(
+        pickLine(lines, stageKey + "-missing-" + missing.length),
+        "hint",
+        true
+      );
     } else if (stageKey === "3") {
       const lines = [
         "This mission is about automation: run your full recipe over many images, then save them out. Your loop body should look like a mini version of the Stage 1–2 pipeline, and there should be a save step after the loop.",
@@ -1627,6 +1742,16 @@ function updateBaymaxFromChecklist(
         "hint",
         true
       );
+      return;
+    }
+
+    if (stageKey === "4") {
+      const lines = [
+        "Quiz complete: you found the missing normalize block and finished the preprocessing chain.",
+        "Nice work. The missing block is in place, so the full Stage 1 + Stage 2 chain is now complete.",
+        "That’s the right answer. Your pipeline now includes the final normalize step where it belongs.",
+      ];
+      setBaymaxState(pickLine(lines, stageKey + "-done-quiz"), "success", false);
       return;
     }
 
@@ -1824,6 +1949,11 @@ function updateBaymaxFromChecklist(
           setSubmitLines([
             "✓ Your pipeline now shapes images into a consistent 150×150 frame and normalizes values to 0–1.",
           ]);
+        } else if (stageKey === "4") {
+          setSubmitTitle("Quiz Complete - Missing block found");
+          setSubmitLines([
+            "✓ You identified the missing normalize block and completed the preprocessing chain.",
+          ]);
         } else {
           setSubmitTitle("Stage Complete!");
           setSubmitLines([
@@ -1858,6 +1988,9 @@ function updateBaymaxFromChecklist(
         } else if (stageKey === "2") {
           failLine =
             "You’re not far off. Set resize and pad to 150 × 150, then make sure normalize is in 0–1 mode to match this merged stage.";
+        } else if (stageKey === "4") {
+          failLine =
+            "You’re close. This quiz only needs the missing normalize block added after pad to finish the chain.";
         } else if (stageKey === "1") {
           failLine =
             "You’re close. Make sure the Stage 1 preprocessing chain is complete and in a sensible order before submitting.";
@@ -2048,7 +2181,7 @@ function updateBaymaxFromChecklist(
                 />
               </div>
 
-              {(String(stage.id) === "1" || String(stage.id) === "2" || String(stage.id) === "3") && (
+              {(String(stage.id) === "1" || String(stage.id) === "2" || String(stage.id) === "3" || String(stage.id) === "4") && (
                 <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>

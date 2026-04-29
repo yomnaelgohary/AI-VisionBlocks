@@ -909,6 +909,9 @@ def _analyze_module2_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[s
     elif stage_id == "3":
         required_order = M2_STAGE3_REQUIRED_ORDER
         stage_label = "Stage 3"
+    elif stage_id == "4":
+        required_order = M2_STAGE2_REQUIRED_ORDER
+        stage_label = "Stage 4"
 
     validation_errors: List[str] = []
     invalid_param_block: Optional[str] = None
@@ -1265,7 +1268,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     analyzer = analyze_module2(req)
     now = time.time()
     stage_id = str(req.stage_id or "1")
-    if stage_id not in {"1", "2", "3"}:
+    if stage_id not in {"1", "2", "3", "4"}:
         stage_id = "1"
 
     key = _history_key(req, request) + f":module2-stage{stage_id}"
@@ -1321,6 +1324,56 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
             f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
             f"Repeat count for same mistake: {history.repeat_count}."
         )
+
+    if stage_id == "4":
+        friendly_block = _friendly_m2_block_name(invalid_param_block or wrong_block or next_missing or "m2.normalize")
+        friendly_missing = _friendly_m2_block_name(next_missing or "m2.normalize")
+        friendly_wrong = _friendly_m2_block_name(wrong_block or invalid_param_block or "")
+
+        if problem_type == "complete":
+            prompt = (
+                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 4 (Quiz: Missing Normalize). "
+                "The student solved the quiz by placing the missing normalize block in the right spot. "
+                "Respond in 1-2 short sentences: praise the success, confirm the chain is now complete, and encourage submitting. "
+                "Do not mention internal block ids."
+            ) + common_context
+        elif problem_type == "wrong_block":
+            prompt = (
+                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 4 (Quiz: Missing Normalize). "
+                "The student chose a block that does not belong in the missing slot. "
+                f"Explain briefly why '{friendly_wrong}' does not fit here, using the current chain context. "
+                f"Give an indirect hint that the missing step is the '{friendly_missing}' block after pad. "
+                "Do not reveal the exact code identifier. Respond in 2-3 short sentences, no bullets, warm and clear."
+            ) + common_context
+        elif problem_type == "wrong_order":
+            prompt = (
+                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 4 (Quiz: Missing Normalize). "
+                "The student has the right blocks but the order is wrong. "
+                "Explain that normalize needs to come after resize and pad because the data must be fully framed first. "
+                "Give a short indirect hint that the missing step belongs at the end of the preprocessing chain. "
+                "Do not mention internal block ids. Respond in 2-3 short sentences, no bullets."
+            ) + common_context
+        elif problem_type == "invalid_params":
+            prompt = (
+                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 4 (Quiz: Missing Normalize). "
+                "The student is working on the quiz chain and some parameter values are off. "
+                f"Explain why the '{friendly_block}' block's current settings do not match the stage goal, using the visible chain context. "
+                "Give one indirect, human-friendly hint that helps them inspect the block and adjust the values. "
+                "Do not mention internal block ids or exact code names. Respond in 2-3 short sentences, no bullets."
+            ) + common_context
+        else:
+            prompt = (
+                "You are Baymax-style tutor for VisionBlocks Module 2 Stage 4 (Quiz: Missing Normalize). "
+                "A required block is still missing from the quiz chain. "
+                f"Use the chain context to explain why the missing step is '{friendly_missing}' and why it should come after pad. "
+                "Give one indirect hint only, without naming the exact code identifier. Respond in 2-3 short sentences, no bullets, friendly tone."
+            ) + common_context
+
+        agent_text = _call_openrouter(prompt)
+        agent_text = _sanitize_m2_agent_text(agent_text)
+        history.last_hint = agent_text
+        _M2_STAGE_HISTORY[key] = history
+        return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
 
     # Deterministic parameter guidance to avoid LLM hallucinated values.
     if problem_type == "invalid_params" and validation_errors:

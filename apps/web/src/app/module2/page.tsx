@@ -24,6 +24,12 @@ export default function Module2Index() {
       short:
         "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
     },
+    {
+      id: "4",
+      title: "Stage 4: Quiz - Add Normalize",
+      short:
+        "The chain is already built for you. Find the missing normalize block and complete the pipeline.",
+    },
   ];
 
   return (

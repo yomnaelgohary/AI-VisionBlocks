@@ -190,4 +190,49 @@ export const module2Stages: StageConfig[] = [
       { type: "pad", w: 150, h: 150, mode: "constant", r: 0, g: 0, b: 0 },
     ],
   },
+
+  // STAGE 4 – Quiz: Missing Normalize
+  {
+    id: 4,
+    title: "Stage 4: Quiz - Add Normalize",
+    type: "pipeline",
+    intro: [
+      "The pipeline is already built for you, but one important block is missing.",
+      "Find the missing normalize block and place it where it belongs to complete the chain.",
+    ],
+    help: {
+      title: "Quiz Stage: Fill the Gap",
+      text: `
+    This stage is a quiz. The workspace already shows the preprocessing chain from Stages 1 and 2,
+    but one block has been removed on purpose.
+
+    Your job is to identify the missing normalize block and add it in the correct place.
+    The rest of the UI stays the same so you can focus only on the block choice.
+    `.trim(),
+    },
+    requiredBlocks: [
+      "m2.to_grayscale",
+      "m2.brightness_contrast",
+      "m2.blur_sharpen",
+      "m2.resize",
+      "m2.pad",
+      "m2.normalize",
+    ],
+    expectedOrder: [
+      "m2.to_grayscale",
+      "m2.brightness_contrast",
+      "m2.blur_sharpen",
+      "m2.resize",
+      "m2.pad",
+      "m2.normalize",
+    ],
+    targetOps: [
+      { type: "to_grayscale" },
+      { type: "brightness_contrast", b: 10, c: 10 },
+      { type: "blur_sharpen", blur: 0, sharp: 1.0 },
+      { type: "resize", mode: "size", w: 150, h: 256, keep: "TRUE" },
+      { type: "pad", w: 150, h: 150, mode: "constant" },
+      { type: "normalize", mode: "zero_one" },
+    ],
+  },
 ];
