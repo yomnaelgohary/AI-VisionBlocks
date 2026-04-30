@@ -18,6 +18,12 @@ export default function Module4Index() {
       short:
         "Set training hyperparameters, train your model, then evaluate on TEST and run single-image predictions in one merged stage.",
     },
+    {
+      id: "3",
+      title: "Stage 3: Quiz - Arrange All Blocks",
+      short:
+        "All mission blocks are scattered. Rebuild one full correct pipeline from split to prediction with personalized AI coaching.",
+    },
   ];
 
   return (

@@ -488,9 +488,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [baymaxBump, setBaymaxBump] = useState(false);
   const lastBaymaxTextRef = useRef<string>("");
   const [aiAssistantText, setAiAssistantText] = useState<string>(
-    "LLM assistant is waiting for your Stage 1 edits..."
+    "LLM assistant is waiting for your edits..."
   );
   const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
+  const [agentHistory, setAgentHistory] = useState<{ ts: number; text: string }[]>([]);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
 
   const [infoOpen, setInfoOpen] = useState(false);
   const [infoTitle, setInfoTitle] = useState<string>();
@@ -506,6 +508,31 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const m4AgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const m4AgentTokenRef = useRef(0);
   const m4AgentSigRef = useRef("");
+
+  const assistantHistoryKey = `vb_module4_stage${String(stageId)}_history`;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(assistantHistoryKey);
+      setAgentHistory(raw ? JSON.parse(raw) : []);
+    } catch {
+      setAgentHistory([]);
+    }
+  }, [assistantHistoryKey]);
+
+  function persistAssistantHistory(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === "Thinking...") return;
+    if (trimmed.startsWith("LLM assistant is waiting")) return;
+    const entry = { ts: Date.now(), text: trimmed };
+    setAgentHistory((prev) => {
+      const next = [entry, ...prev].slice(0, 200);
+      try {
+        window.localStorage.setItem(assistantHistoryKey, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
   useEffect(() => {
@@ -605,7 +632,9 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   }
 
   function requestStageAgentHintDebounced(ws: WorkspaceSvg) {
-    if (!stage || String(stage.id) !== "1") return;
+    if (!stage) return;
+    const currentStageId = String(stage.id);
+    if (!["1", "2", "3"].includes(currentStageId)) return;
 
     if (m4AgentTimerRef.current) clearTimeout(m4AgentTimerRef.current);
     m4AgentTimerRef.current = setTimeout(async () => {
@@ -616,8 +645,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
       const payload: AnalyzeAgentReq = {
         chains,
-        stage_id: "1",
-        client_signature: "module4-stage1-live",
+        stage_id: currentStageId,
+        client_signature: `module4-stage${currentStageId}-live`,
       };
 
       const sig = JSON.stringify(payload);
@@ -637,10 +666,12 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const text = (resp.agent_text || "").trim();
         if (!text) return;
         setAiAssistantText(text);
+        persistAssistantHistory(text);
       } catch (e: any) {
         if (myToken !== m4AgentTokenRef.current) return;
         const msg = (e?.message || "Request failed").toString();
         setAiAssistantText(`LLM error: ${msg}`);
+        persistAssistantHistory(`LLM error: ${msg}`);
       } finally {
         if (myToken === m4AgentTokenRef.current) {
           setAiAssistantLoading(false);
@@ -658,10 +689,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     m4AgentSigRef.current = "";
     setAiAssistantLoading(false);
     setAiAssistantText(
-      String(stage.id) === "1"
-        ? "LLM assistant is waiting for your Stage 1 edits..."
-        : "LLM assistant is available for Stage 1 only."
+      ["1", "2", "3"].includes(String(stage.id))
+        ? "LLM assistant is waiting for your edits..."
+        : "LLM assistant is available for Stages 1, 2, and quiz."
     );
+      setAgentHistory([]);
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule4,
@@ -703,6 +735,32 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         newBlock.render();
         previousBlock = newBlock;
       }
+    } else if (String(stage.id) === "3") {
+      // Stage 3 quiz: create all required blocks as disconnected/scattered.
+      const blocksToCreate = Array.from(new Set(stage.requiredBlocks || []));
+      let row = 0;
+      let col = 0;
+
+      for (const blockType of blocksToCreate) {
+        const newBlock = ws.newBlock(blockType);
+        newBlock.initSvg();
+        newBlock.render();
+
+        // Position blocks more to the left and compact to fit better
+        const x = 15 + col * 190 + (row % 2) * 10;
+        const y = 40 + row * 85;
+        try {
+          newBlock.moveBy(x, y);
+        } catch {
+          // ignore placement issues and keep default Blockly placement
+        }
+
+        col += 1;
+        if (col >= 3) {
+          col = 0;
+          row += 1;
+        }
+      }
     } else {
       // All other stages: just start with "use dataset"
       const ds = ws.newBlock("dataset.select");
@@ -719,8 +777,13 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     };
     window.addEventListener("vb:blockInfo", onInfo as any);
 
-    // On-change: recompute checklist, glow, Baymax (no API calls here)
-    const onChange = () => {
+    // On-change: recompute checklist, glow, Baymax and request agent hints.
+    // Ignore pure UI events (these fire a lot during drag/selection) to avoid
+    // duplicate agent requests for a single user action.
+    const onChange = (e: any) => {
+      // Blockly UI events are high-volume and not structural.
+      if (e && e.type === (Blockly.Events as any).UI) return;
+
       setTimeout(() => {
         if (!workspaceRef.current || !stage) return;
         const items = computeChecklist(workspaceRef.current, stage);
@@ -730,7 +793,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         requestStageAgentHintDebounced(workspaceRef.current);
       }, 150);
     };
-    ws.addChangeListener(onChange);
+    ws.addChangeListener(onChange as any);
 
     const initialItems = computeChecklist(ws, stage);
     setCheckItems(initialItems);
@@ -856,6 +919,33 @@ function updateBaymaxFromChecklist(
   const wrong = items.filter((i) => i.state === "wrong_place");
   const stageKey = String(s.id);
   const isMergedStage = stageKey === "2";
+
+  if (stageKey === "3") {
+    if (initial) {
+      setBaymaxState(
+        "Quiz mode: connect all scattered blocks into one clean pipeline from split to prediction.",
+        "neutral",
+        false
+      );
+      return;
+    }
+
+    if (done === total && total > 0) {
+      setBaymaxState(
+        "Excellent. The full quiz pipeline is complete and correctly arranged. Submit to validate.",
+        "success",
+        false
+      );
+      return;
+    }
+
+    setBaymaxState(
+      `Quiz progress: ${done}/${total} correct in the main chain. Keep arranging blocks in workflow order.`,
+      wrong.length > 0 ? "warning" : "hint",
+      true
+    );
+    return;
+  }
 
   if (initial) {
     const introLine =
@@ -1530,7 +1620,7 @@ function updateBaymaxFromChecklist(
                 />
               </div>
 
-              {String(stage.id) === "1" && (
+              {["1", "2", "3"].includes(String(stage.id)) && (
                 <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
@@ -1544,6 +1634,14 @@ function updateBaymaxFromChecklist(
                   {aiAssistantLoading && (
                     <div className="mt-2 text-[11px] text-fuchsia-600">Thinking...</div>
                   )}
+                  <div className="mt-2 text-right">
+                    <button
+                      className="text-xs text-fuchsia-700 underline"
+                      onClick={() => setAgentHistoryOpen(true)}
+                    >
+                      View chat
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1558,6 +1656,47 @@ function updateBaymaxFromChecklist(
           </div>
         </div>
       </div>
+
+        {agentHistoryOpen && (
+          <div className="fixed inset-0 z-[980] flex items-center justify-center bg-black/40">
+            <div className="max-w-2xl w-[92%] max-h-[80vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">AI Assistant chat</h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-sm text-slate-600 hover:underline"
+                    onClick={() => {
+                      try {
+                        window.localStorage.removeItem(assistantHistoryKey);
+                      } catch {}
+                      setAgentHistory([]);
+                    }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className="px-3 py-1 rounded-full bg-sky-500 text-xs text-white"
+                    onClick={() => setAgentHistoryOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-auto h-[60vh] pr-2">
+                {agentHistory.length === 0 && (
+                  <div className="text-sm text-slate-500">No history yet.</div>
+                )}
+                {agentHistory.map((entry) => (
+                  <div key={entry.ts} className="mb-3 border-b pb-2">
+                    <div className="text-[11px] text-slate-400 mb-1">{new Date(entry.ts).toLocaleString()}</div>
+                    <div className="whitespace-pre-wrap text-sm text-slate-800">{entry.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
       <InfoModal
         open={infoOpen}

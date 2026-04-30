@@ -73,6 +73,9 @@ _HISTORY: Dict[str, _StudentHistory] = {}
 
 class _Module2StageHistory(BaseModel):
     last_problem_key: Optional[str] = None
+    last_chain_key: Optional[str] = None
+    last_wrong_block: Optional[str] = None
+    wrong_block_repeat: int = 0
     repeat_count: int = 0
     last_hint: Optional[str] = None
     last_seen: float = 0.0
@@ -316,13 +319,13 @@ def _call_openrouter(prompt: str) -> str:
     chat_payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 64,
+        "max_tokens": 300,
         "temperature": 0.2,
     }
     prompt_payload = {
         "model": model,
         "prompt": prompt,
-        "max_tokens": 64,
+        "max_tokens": 300,
         "temperature": 0.2,
     }
     max_attempts = 3
@@ -1102,17 +1105,62 @@ M4_STAGE1_REQUIRED_ORDER = [
     "m4.model_summary",
 ]
 
+M4_STAGE2_REQUIRED_ORDER = [
+    "dataset.select",
+    "m3.set_split_ratio",
+    "m3.apply_split",
+    "m4.model_init",
+    "m4.layer_conv2d",
+    "m4.layer_pool",
+    "m4.layer_dense",
+    "m4.model_summary",
+    "m4.train_hparams",
+    "m4.train_start",
+    "m4.eval_test",
+    "dataset.sample_image",
+    "m4.predict_sample",
+]
 
-def _analyze_module4_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
+
+def _friendly_m4_label(block_type: Optional[str]) -> str:
+    if not block_type:
+        return ""
+    labels = {
+        "dataset.select": "use dataset",
+        "m3.set_split_ratio": "set split ratio",
+        "m3.apply_split": "apply split",
+        "m4.model_init": "start new model",
+        "m4.layer_conv2d": "add conv layer",
+        "m4.layer_pool": "add pooling layer",
+        "m4.layer_dense": "add dense layer",
+        "m4.model_summary": "show model summary",
+        "m4.train_hparams": "training setup",
+        "m4.train_start": "start training",
+        "m4.eval_test": "evaluate on test set",
+        "dataset.sample_image": "get sample image",
+        "m4.predict_sample": "predict current sample",
+    }
+    return labels.get(block_type, block_type.replace("m3.", "").replace("m4.", "").replace("dataset.", ""))
+
+
+def _sanitize_m4_agent_text(text: str) -> str:
+    if not text:
+        return text
+    for t in M4_STAGE2_REQUIRED_ORDER:
+        text = text.replace(t, _friendly_m4_label(t))
+    return text
+
+
+def _analyze_module4_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[str, Any]:
     primary_chain = _find_primary_chain(req)
     chain_blocks = primary_chain.blocks if primary_chain else []
     chain_types = [b.type for b in chain_blocks]
 
-    expected = M4_STAGE1_REQUIRED_ORDER
+    expected = M4_STAGE1_REQUIRED_ORDER if stage_id == "1" else M4_STAGE2_REQUIRED_ORDER
     found = [t for t in chain_types if t in expected]
     missing = [t for t in expected if t not in found]
     unexpected = [t for t in chain_types if t.startswith("m3.") or t.startswith("m4.") or t.startswith("dataset.")]
-    unexpected = [t for t in unexpected if t not in expected and t != "dataset.sample_image"]
+    unexpected = [t for t in unexpected if t not in expected]
 
     order_wrong = False
     idxs: Dict[str, int] = {}
@@ -1137,12 +1185,17 @@ def _analyze_module4_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
         problem_type = "missing"
 
     return {
+        "stage_id": stage_id,
         "problem_type": problem_type,
         "next_missing": missing[0] if missing else None,
         "wrong_block": unexpected[-1] if unexpected else None,
         "full_chain": chain_types,
         "expected_order": expected,
     }
+
+
+def _analyze_module4_stage1_problem(req: AnalyzeRequest) -> Dict[str, Any]:
+    return _analyze_module4_stage_problem(req, "1")
 
 
 @router.post("/analyze/module4", response_model=AnalyzeResponse)
@@ -1153,12 +1206,13 @@ def analyze_module4(req: AnalyzeRequest):
     stage_id = str(req.stage_id or "1")
     checklist: List[ChecklistItem] = []
 
-    if stage_id == "1":
+    if stage_id in {"1", "2", "3"}:
+        expected_order = M4_STAGE1_REQUIRED_ORDER if stage_id == "1" else M4_STAGE2_REQUIRED_ORDER
         primary_chain = _find_primary_chain(req)
         chain_types = [b.type for b in primary_chain.blocks] if primary_chain else []
 
         last = -1
-        for t in M4_STAGE1_REQUIRED_ORDER:
+        for t in expected_order:
             label = t.replace("m3.", "").replace("m4.", "").replace("dataset.", "")
             if t not in chain_types:
                 state = "missing"
@@ -1176,16 +1230,19 @@ def analyze_module4(req: AnalyzeRequest):
 def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
     analyzer = analyze_module4(req)
     stage_id = str(req.stage_id or "1")
-    if stage_id != "1":
+    if stage_id not in {"1", "2", "3"}:
         return AnalyzeAgentResponse(
             analyzer=analyzer,
-            agent_text="Stage analyzer is currently enabled for Module 4 Stage 1 only.",
+            agent_text="Stage analyzer is currently enabled for Module 4 Stage 1, Stage 2, and Stage 3 quiz.",
         )
 
     now = time.time()
-    key = _history_key(req, request) + ":module4-stage1"
+    key = _history_key(req, request) + f":module4-stage{stage_id}"
     history = _M4_STAGE_HISTORY.get(key) or _Module2StageHistory()
-    problem = _analyze_module4_stage1_problem(req)
+    problem = _analyze_module4_stage_problem(req, stage_id)
+
+    chain_key = " -> ".join(problem["full_chain"]) or "empty"
+    student_moved = history.last_chain_key is not None and history.last_chain_key != chain_key
 
     problem_key = (
         f"{problem['problem_type']}|missing={problem['next_missing']}|"
@@ -1201,62 +1258,172 @@ def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
         history.repeat_count = 0
 
     history.last_problem_key = problem_key
+    history.last_chain_key = chain_key
+    if problem["problem_type"] == "wrong_block" and problem["wrong_block"]:
+        if history.last_wrong_block == problem["wrong_block"]:
+            history.wrong_block_repeat += 1
+        else:
+            history.wrong_block_repeat = 0
+        history.last_wrong_block = problem["wrong_block"]
+    else:
+        history.last_wrong_block = None
+        history.wrong_block_repeat = 0
     history.last_seen = now
 
     chain_text = " -> ".join(problem["full_chain"]) or "empty"
     expected_text = " -> ".join(problem["expected_order"])
+    stage_label = "Module 4 Stage 1" if stage_id == "1" else "Module 4 Stage 3 Quiz"
+    is_pipeline_empty = len(problem["full_chain"]) == 0
     common_context = (
         f"\n\nCurrent chain: {chain_text}. "
         f"Expected stage order: {expected_text}. "
         f"Problem type: {problem['problem_type']}. "
         f"Next missing: {problem['next_missing']}. "
         f"Wrong block: {problem['wrong_block']}. "
-        f"Repeat count: {history.repeat_count}."
+        f"Repeat count: {history.repeat_count}. "
+        f"Student moved since last hint: {student_moved}. "
+        f"Wrong-block repeat: {history.wrong_block_repeat}."
     )
 
-    if problem["problem_type"] == "complete":
+    # Special case: EMPTY PIPELINE on FIRST ATTEMPT - introduce the workflow, don't assume prior choices
+    if is_pipeline_empty and history.repeat_count == 0:
+        if stage_id == "1":
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student is starting fresh with an empty workspace. Introduce the workflow concept:\n"
+                "1) Explain that they're about to build a machine learning pipeline.\n"
+                "2) Ask: what is the FIRST thing that must happen in any ML project before you can build or test a model?\n"
+                "3) Guide them toward the conceptual step without naming the block directly (e.g., 'what do you need to prepare from your dataset?').\n"
+                "Keep it conversational and exploratory, 2-3 sentences. Goal: spark their thinking about the workflow."
+            ) + common_context
+        else:  # stage_id == "3" (quiz)
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student is starting a quiz to arrange a complete ML pipeline from scratch. Introduce the task:\n"
+                "1) Explain that they'll arrange blocks in the correct order for a full ML workflow.\n"
+                "2) Ask: which step comes FIRST in a machine learning project—before model building, training, or evaluation?\n"
+                "3) Encourage them to think about the logical sequence and start by dragging the first block.\n"
+                "Keep it engaging and thought-provoking, 2-3 sentences. Goal: guide discovery, not instruction."
+            ) + common_context
+    elif problem["problem_type"] == "complete":
         prompt = (
-            "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-            "The student completed split and model-build flow correctly. "
-            "Respond in 1-2 short encouraging sentences and suggest pressing Submit and moving to next stage."
+            f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+            "The student successfully arranged the entire pipeline. Congratulate them warmly, "
+            "explain in 1 sentence why this complete sequence makes sense for the ML workflow, "
+            "and encourage them to submit. Keep it celebratory and brief (2-3 sentences max)."
         ) + common_context
     elif problem["problem_type"] == "wrong_order":
-        if history.repeat_count >= 1:
+        # First attempt: teach *why* ordering matters, not just fix it
+        if history.repeat_count == 0:
             prompt = (
-                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-                "Student keeps repeating order mistakes. "
-                "State the correct sequence clearly and briefly explain why split must come before model layers. "
-                "Use 2 short sentences, no bullets."
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student has blocks in the wrong sequence. DON'T just tell them the correct order. Instead:\n"
+                "1) Point out ONE adjacent pair that's wrong (e.g., 'I notice X is placed before Y').\n"
+                "2) Explain WHY that order is problematic for the ML pipeline (what does X produce that Y needs?).\n"
+                "3) Guide them to think about the logical data flow, not just follow a recipe.\n"
+                "Keep it conversational and focused on understanding, not memorization (2-3 sentences)."
             ) + common_context
+        # Repeated mistake: be clearer but still educational
+        elif history.repeat_count == 1:
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student still has blocks out of order (they struggled with this before). "
+                "Now be more direct but still educational:\n"
+                "1) Name the specific issue (e.g., a block needs to come after another block).\n"
+                "2) Briefly explain the reason (e.g., 'because you need prepared data before building the model').\n"
+                "3) Suggest one specific move to try.\n"
+                "Use 2-3 short sentences, supportive tone."
+            ) + common_context
+        # Multiple repeats: be direct but still explain
         else:
             prompt = (
-                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-                "Order is wrong. Give a gentle hint about fixing sequence from split to model summary without listing extra details. "
-                "Use 2 short sentences, no bullets."
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student has repeatedly struggled with block ordering. Help them succeed:\n"
+                "1) Clearly state the exact fix needed.\n"
+                "2) Remind them of the reason in 1 simple phrase (e.g., 'to ensure data flows correctly').\n"
+                "3) Encourage them that this understanding will help with future models.\n"
+                "Use 2 sentences, direct but encouraging."
             ) + common_context
     elif problem["problem_type"] == "wrong_block":
-        prompt = (
-            "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-            "Student placed a block that does not belong to this stage flow. "
-            "Give a clear but friendly hint to remove that block and continue with split then model-build blocks only. "
-            "Use 2 short sentences, no bullets."
-        ) + common_context
-    else:
-        if history.repeat_count >= 1:
+        # First time: explain the block's role
+        if history.wrong_block_repeat == 0:
             prompt = (
-                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-                "The same required step is still missing. "
-                "Be more direct and name the next missing block and where it should appear in the chain. "
-                "Use 2 short sentences, no bullets."
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                f"The student placed a block that doesn't belong in this stage ({problem.get('wrong_block', 'a block')}). "
+                "Guide them to understand why:\n"
+                "1) Identify the block they chose and what it does.\n"
+                "2) Explain why it doesn't fit this stage (e.g., 'this is for training, but you haven't built your model yet').\n"
+                "3) Ask them to think: what is this stage's purpose? What should come here instead?\n"
+                "Use 2-3 sentences to prompt reflection, not give the answer."
             ) + common_context
+        # Repeated mistake: be clearer
+        elif history.wrong_block_repeat == 1:
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                f"The student chose a wrong block again. They're struggling, so help more directly:\n"
+                "1) Confirm: this block is not meant for this stage—it belongs in a later stage.\n"
+                f"2) Remind them: this stage is about preparing data or building the model. "
+                "3) Suggest: look for a block that directly supports that goal.\n"
+                "Use 2 short sentences, stay supportive."
+            ) + common_context
+        # Multiple repeats: simplify further
         else:
             prompt = (
-                "You are the AI assistant for VisionBlocks Module 4 Stage 1 (Split Data and Build CNN). "
-                "A required step is missing. Give one hint about the next missing step, concise and supportive. "
-                "Use 2 short sentences, no bullets."
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                f"The student keeps choosing the wrong block ({problem.get('wrong_block', 'a block')}). "
+                "Simplify and support:\n"
+                "1) This block does not belong here—it's for a different part of the ML workflow.\n"
+                "2) This stage needs a block that prepares data or builds the model. "
+                "3) Try a different block from the toolbox.\n"
+                "Use very simple language, 2 sentences."
+            ) + common_context
+    else:  # missing block
+        # First attempt: teach data flow concept
+        if history.repeat_count == 0:
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                f"The student's pipeline is incomplete—a required step is missing. "
+                "Teach them to think through the data flow:\n"
+                "1) Point out what they have done so far and what the pipeline is missing.\n"
+                "2) Ask: what must happen next in a real ML workflow before you can move forward?\n"
+                "3) Hint at the concept (e.g., 'you've loaded data, now what do you need to do before building a model?').\n"
+                "Encourage them to find the answer themselves—don't name the block directly. Use 2-3 sentences."
+            ) + common_context
+        # Repeated mistake: be more direct
+        elif history.repeat_count == 1:
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student is still missing the same block. "
+                "Be more direct now:\n"
+                "1) Name the missing step and what it does.\n"
+                "2) Explain why it matters in the workflow.\n"
+                "3) Encourage them: try dragging a block that matches this description.\n"
+                "Use 2 short sentences."
+            ) + common_context
+        # Multiple repeats: very direct
+        else:
+            prompt = (
+                f"You are an educational AI tutor for VisionBlocks {stage_label}. "
+                "The student still hasn't added the missing piece. Let's simplify:\n"
+                "1) You are missing a key step in the pipeline.\n"
+                "2) This step helps [briefly explain its role].\n"
+                "3) Find it in the toolbox and add it after the current last block.\n"
+                "Keep it very simple and action-oriented, 2 sentences."
             ) + common_context
 
-    agent_text = _call_openrouter(prompt)
+            # end of prompt-building branches
+
+    # Ensure `agent_text` is always assigned. If a prompt was built, call the LLM;
+    # otherwise provide a deterministic fallback message.
+    if 'prompt' in locals() and prompt:
+        try:
+            raw = _call_openrouter(prompt)
+            agent_text = _sanitize_m4_agent_text(raw)
+        except Exception as exc:  # keep endpoint stable when LLM fails
+            agent_text = f"LLM error: {str(exc)}"
+    else:
+        agent_text = "No hint available for this situation."
+
     history.last_hint = agent_text
     _M4_STAGE_HISTORY[key] = history
 

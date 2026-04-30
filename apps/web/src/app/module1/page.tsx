@@ -9,7 +9,7 @@ import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 import { toolboxJson } from "@/components/Toolbox";
 
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
-import BaymaxPanel from "@/components/BaymaxPanel";
+import PixelwiseCharacter from "@/components/PixelwiseCharacter";
 import InfoModal from "@/components/InfoModal";
 import SubmissionModal from "@/components/SubmissionModal";
 import MissionChecklistStage, {
@@ -150,6 +150,34 @@ export default function Module1Page() {
   );
   const [baymaxMood, setBaymaxMood] = useState<BaymaxMood>("neutral");
   const [baymaxTyping, setBaymaxTyping] = useState<boolean>(false);
+
+  // AI Assistant state (matches Module 2 / 4 UI)
+  const [aiAssistantText, setAiAssistantText] = useState<string>("");
+  const [aiAssistantLoading, setAiAssistantLoading] = useState<boolean>(false);
+  const [agentHistory, setAgentHistory] = useState<{
+    ts: number;
+    text: string;
+  }[]>([]);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState<boolean>(false);
+
+  // Determine Pixelwise mood based on assistant message
+  const getMood = () => {
+    if (aiAssistantLoading) return "thinking";
+    if (!aiAssistantText) return "idle";
+    const lower = aiAssistantText.toLowerCase();
+    if (lower.includes("error") || lower.includes("failed")) return "error";
+    if (lower.includes("warning") || lower.includes("wrong") || lower.includes("incorrect")) return "warning";
+    if (lower.includes("great") || lower.includes("excellent") || lower.includes("perfect") || lower.includes("mission")) return "success";
+    return "hint";
+  };
+
+  // Load persisted history
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("vb_agent_history_module1");
+      if (raw) setAgentHistory(JSON.parse(raw));
+    } catch {}
+  }, []);
 
   // Baymax animation
   const [baymaxBump, setBaymaxBump] = useState(false);
@@ -307,12 +335,25 @@ export default function Module1Page() {
   }
 
   function setAgentCard(lines: string[]) {
-    setLogs((prev) => {
-      const filtered = prev.filter(
-        (item) => !(item.kind === "card" && item.title === "Agent")
-      );
-      return [{ kind: "card", title: "Agent", lines }, ...filtered];
-    });
+    const text = lines.join("\n").trim();
+
+    // Update assistant display and loading (do NOT add to main logs)
+    setAiAssistantText(text === "Thinking…" ? "" : text);
+    setAiAssistantLoading(text === "Thinking…");
+
+    // Persist meaningful hints to localStorage (skip transient messages)
+    const skipPrefixes = ["Thinking…", "Hint unavailable", "Agent error", "Rate limited"];
+    const shouldPersist = text && !skipPrefixes.some((p) => text.startsWith(p));
+    if (shouldPersist) {
+      const entry = { ts: Date.now(), text };
+      setAgentHistory((prev) => {
+        const next = [entry, ...prev].slice(0, 200);
+        try {
+          localStorage.setItem("vb_agent_history_module1", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    }
   }
 
   /* ---------- Inject Blockly ---------- */
@@ -778,6 +819,7 @@ export default function Module1Page() {
         const fireAgentRequest = (payloadStr: string) => {
           const myAnalyzerToken = ++analyzerTokenRef.current;
           lastAgentCallAtRef.current = Date.now();
+          // Show single Thinking… indicator in the assistant panel
           setAgentCard(["Thinking…"]);
 
           const controller = new AbortController();
@@ -1245,12 +1287,22 @@ export default function Module1Page() {
                   </div>
                 </div>
 
-                <BaymaxPanel
-                  line={baymax}
-                  mood={baymaxMood}
-                  typing={baymaxTyping}
-                  dark={false}
-                />
+                {/* Pixelwise AI Guide Character */}
+                <div className="mt-3">
+                  <PixelwiseCharacter
+                    message={aiAssistantText}
+                    mood={getMood()}
+                    loading={aiAssistantLoading}
+                  />
+                  <div className="mt-2 text-center">
+                    <button
+                      className="text-xs text-indigo-700 hover:underline"
+                      onClick={() => setAgentHistoryOpen(true)}
+                    >
+                      View chat history
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Output takes rest */}
@@ -1400,6 +1452,48 @@ export default function Module1Page() {
       )}
 
       {/* Info Modal */}
+      {/* Agent chat history modal */}
+      {agentHistoryOpen && (
+        <div className="fixed inset-0 z-[980] flex items-center justify-center bg-black/40">
+          <div className="max-w-2xl w-[92%] max-h-[80vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold">AI Assistant chat</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  className="text-sm text-slate-600 hover:underline"
+                  onClick={() => {
+                    try {
+                      localStorage.removeItem("vb_agent_history_module1");
+                    } catch {}
+                    setAgentHistory([]);
+                  }}
+                >
+                  Clear
+                </button>
+                <button
+                  className="px-3 py-1 rounded-full bg-sky-500 text-xs text-white"
+                  onClick={() => setAgentHistoryOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-auto h-[60vh] pr-2">
+              {agentHistory.length === 0 && (
+                <div className="text-sm text-slate-500">No history yet.</div>
+              )}
+              {agentHistory.map((e) => (
+                <div key={e.ts} className="mb-3 border-b pb-2">
+                  <div className="text-[11px] text-slate-400 mb-1">{new Date(e.ts).toLocaleString()}</div>
+                  <div className="whitespace-pre-wrap text-sm text-slate-800">{e.text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       <InfoModal
         open={infoOpen}
         title={infoTitle}

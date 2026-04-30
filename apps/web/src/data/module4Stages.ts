@@ -161,4 +161,64 @@ export const module4Stages: StageConfig[] = [
     requiresSplit: true,
     requiresTrainedModel: false, // this stage *creates* the trained model
   },
+
+  // ────────────────────────────────────────────────
+  // STAGE 3 – Quiz: Arrange the full pipeline
+  // ────────────────────────────────────────────────
+  {
+    id: 3,
+    title: "Stage 3: Quiz - Arrange All Blocks",
+    type: "eval_predict",
+    intro: [
+      "All required blocks are scattered in the workspace.",
+      "Your task is to connect and arrange them into one correct end-to-end chain.",
+    ],
+    help: {
+      title: "Quiz Rule: Build the full story in order",
+      text: `
+    This is a pure arrangement quiz.
+
+    • You are given all blocks, already available but disconnected.
+    • Build a single connected chain from dataset selection to final prediction.
+    • The order should follow a realistic ML workflow: split -> build -> train -> evaluate -> predict.
+
+    You can still use the AI assistant for personalized hints based on your moves.
+    `.trim(),
+    },
+    requiredBlocks: [
+      "dataset.select",
+      "m3.set_split_ratio",
+      "m3.apply_split",
+      "m4.model_init",
+      "m4.layer_conv2d",
+      "m4.layer_pool",
+      "m4.layer_dense",
+      "m4.model_summary",
+      "m4.train_hparams",
+      "m4.train_start",
+      "m4.eval_test",
+      "dataset.sample_image",
+      "m4.predict_sample",
+    ],
+    expectedOrder: [
+      "dataset.select",
+      "m3.set_split_ratio",
+      "m3.apply_split",
+      "m4.model_init",
+      "m4.layer_conv2d",
+      "m4.layer_pool",
+      "m4.layer_dense",
+      "m4.model_summary",
+      "m4.train_hparams",
+      "m4.train_start",
+      "m4.eval_test",
+      "dataset.sample_image",
+      "m4.predict_sample",
+    ],
+    minConvLayers: 1,
+    minPoolLayers: 1,
+    minDenseLayers: 1,
+    requiresSplit: true,
+    requiresTrainedModel: false,
+  },
 ];

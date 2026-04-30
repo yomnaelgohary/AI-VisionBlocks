@@ -471,6 +471,8 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     "LLM assistant is waiting for your Stage 1 edits..."
   );
   const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
+  const [agentHistory, setAgentHistory] = useState<{ ts: number; text: string }[]>([]);
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
 
   // Baymax bump animation
   const [baymaxBump, setBaymaxBump] = useState(false);
@@ -513,6 +515,31 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const m2AgentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const m2AgentTokenRef = useRef(0);
   const m2AgentSigRef = useRef("");
+
+  const assistantHistoryKey = `vb_module2_stage${String(stageId)}_history`;
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(assistantHistoryKey);
+      setAgentHistory(raw ? JSON.parse(raw) : []);
+    } catch {
+      setAgentHistory([]);
+    }
+  }, [assistantHistoryKey]);
+
+  function persistAssistantHistory(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed === "Thinking...") return;
+    if (trimmed.startsWith("LLM assistant is waiting")) return;
+    const entry = { ts: Date.now(), text: trimmed };
+    setAgentHistory((prev) => {
+      const next = [entry, ...prev].slice(0, 200);
+      try {
+        window.localStorage.setItem(assistantHistoryKey, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
   useEffect(() => {
@@ -669,10 +696,12 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         const text = (resp.agent_text || "").trim();
         if (!text) return;
         setAiAssistantText(text);
+        persistAssistantHistory(text);
       } catch (e: any) {
         if (myToken !== m2AgentTokenRef.current) return;
         const msg = (e?.message || "Request failed").toString();
         setAiAssistantText(`LLM error: ${msg}`);
+        persistAssistantHistory(`LLM error: ${msg}`);
       } finally {
         if (myToken === m2AgentTokenRef.current) {
           setAiAssistantLoading(false);
@@ -711,6 +740,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         ? "LLM assistant is waiting for your quiz attempt..."
         : ""
     );
+      setAgentHistory([]);
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
@@ -2195,6 +2225,14 @@ function updateBaymaxFromChecklist(
                   {aiAssistantLoading && (
                     <div className="mt-2 text-[11px] text-fuchsia-600">Thinking...</div>
                   )}
+                  <div className="mt-2 text-right">
+                    <button
+                      className="text-xs text-fuchsia-700 underline"
+                      onClick={() => setAgentHistoryOpen(true)}
+                    >
+                      View chat
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2220,6 +2258,47 @@ function updateBaymaxFromChecklist(
           </div>
         </div>
       </div>
+
+        {agentHistoryOpen && (
+          <div className="fixed inset-0 z-[980] flex items-center justify-center bg-black/40">
+            <div className="max-w-2xl w-[92%] max-h-[80vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">AI Assistant chat</h3>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-sm text-slate-600 hover:underline"
+                    onClick={() => {
+                      try {
+                        window.localStorage.removeItem(assistantHistoryKey);
+                      } catch {}
+                      setAgentHistory([]);
+                    }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className="px-3 py-1 rounded-full bg-sky-500 text-xs text-white"
+                    onClick={() => setAgentHistoryOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-auto h-[60vh] pr-2">
+                {agentHistory.length === 0 && (
+                  <div className="text-sm text-slate-500">No history yet.</div>
+                )}
+                {agentHistory.map((entry) => (
+                  <div key={entry.ts} className="mb-3 border-b pb-2">
+                    <div className="text-[11px] text-slate-400 mb-1">{new Date(entry.ts).toLocaleString()}</div>
+                    <div className="whitespace-pre-wrap text-sm text-slate-800">{entry.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
       {/* Info modal */}
       <InfoModal
