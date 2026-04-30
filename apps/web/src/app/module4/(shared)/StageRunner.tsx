@@ -8,7 +8,7 @@ import { LightTheme } from "@/lib/blockly/theme";
 import { toolboxJsonModule4 } from "@/components/toolboxModule4";
 
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
-import BaymaxPanel from "@/components/BaymaxPanel";
+import PixelwiseCharacter from "@/components/PixelwiseCharacter";
 import InfoModal from "@/components/InfoModal";
 import SubmissionModal from "@/components/SubmissionModal";
 import MissionChecklistStage, {
@@ -1496,6 +1496,16 @@ function updateBaymaxFromChecklist(
 
   /* ---------- UI ---------- */
 
+  const getMood = () => {
+    if (aiAssistantLoading) return "thinking";
+    if (!aiAssistantText) return "idle";
+    const lower = aiAssistantText.toLowerCase();
+    if (lower.includes("error") || lower.includes("failed")) return "error";
+    if (lower.includes("warning") || lower.includes("wrong") || lower.includes("incorrect")) return "warning";
+    if (lower.includes("great") || lower.includes("excellent") || lower.includes("perfect") || lower.includes("mission")) return "success";
+    return "hint";
+  };
+
   if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
 
   return (
@@ -1607,41 +1617,15 @@ function updateBaymaxFromChecklist(
                 </button>
               </div>
 
-              <div
-                className={`shrink-0 transition-transform ${
-                  baymaxBump ? "vb-baymax-bump" : ""
-                }`}
-              >
-                <BaymaxPanel
-                  line={baymax}
-                  mood={baymaxMood}
-                  typing={baymaxTyping}
-                  dark={false}
-                />
-              </div>
-
               {["1", "2", "3"].includes(String(stage.id)) && (
-                <div className="shrink-0 rounded-2xl border border-fuchsia-200 bg-gradient-to-b from-white to-fuchsia-50/60 px-3 py-3 shadow-sm">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <h3 className="text-sm font-semibold text-fuchsia-900">AI Assistant</h3>
-                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-fuchsia-200 bg-fuchsia-100 text-fuchsia-700">
-                      LLM
-                    </span>
-                  </div>
-                  <p className="text-xs leading-relaxed text-fuchsia-900/90">
-                    {aiAssistantText}
-                  </p>
-                  {aiAssistantLoading && (
-                    <div className="mt-2 text-[11px] text-fuchsia-600">Thinking...</div>
-                  )}
-                  <div className="mt-2 text-right">
-                    <button
-                      className="text-xs text-fuchsia-700 underline"
-                      onClick={() => setAgentHistoryOpen(true)}
-                    >
-                      View chat
-                    </button>
-                  </div>
+                <div className="shrink-0 flex flex-col items-center justify-center">
+                  <PixelwiseCharacter message={aiAssistantText} mood={getMood()} loading={aiAssistantLoading} />
+                  <button
+                    className="mt-2 text-xs text-indigo-600 hover:text-indigo-700 underline"
+                    onClick={() => setAgentHistoryOpen(true)}
+                  >
+                    View chat history
+                  </button>
                 </div>
               )}
 
