@@ -4,12 +4,18 @@ import hashlib
 import json
 import os
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import requests
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+try:
+    from langchain.memory import ConversationBufferMemory
+except Exception:  # pragma: no cover - optional dependency
+    ConversationBufferMemory = None  # type: ignore[assignment]
 
 from app.services.datasets import dataset_info
 
@@ -60,6 +66,34 @@ class AnalyzeAgentResponse(BaseModel):
     agent_text: str
 
 
+class ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    workspace_state: Optional[Dict[str, Any]] = None
+    workspace_summary: Optional[Dict[str, Any]] = None
+
+
+class ChatResponse(BaseModel):
+    assistant_response: str
+    last_hint: Optional[str] = None
+    conversation_length: int = 0
+
+
+@dataclass
+class _ChatTurn:
+    role: str
+    content: str
+    ts: float
+    source: str = "chat"
+
+
+@dataclass
+class _ChatSession:
+    turns: List[_ChatTurn] = field(default_factory=list)
+    last_hint: Optional[str] = None
+    memory: Any = None
+
+
 class _StudentHistory(BaseModel):
     last_missing_key: Optional[str] = None
     last_wrong_place: bool = False
@@ -69,6 +103,7 @@ class _StudentHistory(BaseModel):
 
 
 _HISTORY: Dict[str, _StudentHistory] = {}
+_CHAT_HISTORY: Dict[str, _ChatSession] = {}
 
 
 class _Module2StageHistory(BaseModel):
@@ -183,6 +218,144 @@ def _history_key(req: AnalyzeRequest, request: Request) -> str:
         return req.client_signature
     client = request.client.host if request.client else "anon"
     return f"ip:{client}"
+
+
+def _chat_history_key(user_id: str, request: Request) -> str:
+    if user_id:
+        return user_id
+    client = request.client.host if request.client else "anon"
+    return f"ip:{client}"
+
+
+def _get_chat_session(key: str) -> _ChatSession:
+    session = _CHAT_HISTORY.get(key)
+    if session is None:
+        session = _ChatSession()
+        _CHAT_HISTORY[key] = session
+    return session
+
+
+def _ensure_langchain_memory(session: _ChatSession) -> Any:
+    if ConversationBufferMemory is None:
+        return None
+
+    if session.memory is None:
+        memory = ConversationBufferMemory(
+            memory_key="history",
+            input_key="message",
+            output_key="assistant_response",
+            return_messages=False,
+        )
+        for turn in session.turns:
+            if turn.role == "user":
+                memory.chat_memory.add_user_message(turn.content)
+            elif turn.role == "assistant":
+                memory.chat_memory.add_ai_message(turn.content)
+        session.memory = memory
+
+    return session.memory
+
+
+def _append_chat_turn(
+    key: str,
+    role: str,
+    content: str,
+    source: str = "chat",
+    dedupe: bool = False,
+) -> _ChatSession:
+    session = _get_chat_session(key)
+    text = content.strip()
+    if not text:
+        return session
+
+    if dedupe and session.turns:
+        last = session.turns[-1]
+        if last.role == role and last.content == text and last.source == source:
+            return session
+
+    turn = _ChatTurn(role=role, content=text, ts=time.time(), source=source)
+    session.turns.append(turn)
+    session.turns = session.turns[-200:]
+
+    memory = _ensure_langchain_memory(session)
+    if memory is not None:
+        if role == "user":
+            memory.chat_memory.add_user_message(text)
+        elif role == "assistant":
+            memory.chat_memory.add_ai_message(text)
+
+    return session
+
+
+def _workspace_state_summary(value: Any) -> str:
+    if value is None:
+        return "workspace: unavailable"
+
+    try:
+        if isinstance(value, dict):
+            if isinstance(value.get("chains"), list):
+                chains = []
+                for chain in value.get("chains", [])[:8]:
+                    if not isinstance(chain, dict):
+                        continue
+                    blocks = chain.get("blocks") or []
+                    types = [
+                        block.get("type")
+                        for block in blocks
+                        if isinstance(block, dict) and block.get("type")
+                    ]
+                    if types:
+                        chains.append(" -> ".join(types))
+                if chains:
+                    return f"workspace chains: {'; '.join(chains)}"
+
+            if isinstance(value.get("blocks"), list):
+                blocks = []
+                for block in value.get("blocks", [])[:20]:
+                    if not isinstance(block, dict):
+                        continue
+                    block_type = block.get("type")
+                    if block_type:
+                        blocks.append(str(block_type))
+                if blocks:
+                    return f"workspace blocks: {' -> '.join(blocks)}"
+
+        raw = json.dumps(value, ensure_ascii=True)
+    except Exception:
+        raw = str(value)
+
+    if len(raw) > 4000:
+        raw = raw[:4000] + "..."
+    return f"workspace json: {raw}"
+
+
+def _recent_chat_history_text(session: _ChatSession, limit: int = 12) -> str:
+    lines: List[str] = []
+    for turn in session.turns[-limit:]:
+        prefix = "User" if turn.role == "user" else "Assistant"
+        if turn.source == "hint" and turn.role == "assistant":
+            prefix = "Hint"
+        lines.append(f"{prefix}: {turn.content}")
+    return "\n".join(lines) if lines else "Conversation is just starting."
+
+
+def _latest_hint_for_key(key: str) -> Optional[str]:
+    session = _CHAT_HISTORY.get(key)
+    if session and session.last_hint:
+        return session.last_hint
+    history = _HISTORY.get(key)
+    if history and history.last_hint:
+        return history.last_hint
+    return None
+
+
+def _record_hint_in_chat_memory(key: str, hint_text: str) -> None:
+    text = hint_text.strip()
+    if not text:
+        return
+
+    session = _append_chat_turn(key, "assistant", text, source="hint", dedupe=True)
+    session.last_hint = text
 
 
 def _summarize_dataset(key: Optional[str]) -> str:
@@ -506,8 +679,85 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
 
     history.last_hint = agent_text
     _HISTORY[key] = history
+    _record_hint_in_chat_memory(key, agent_text)
 
     return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
+
+
+@router.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest, request: Request):
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    key = _chat_history_key(req.user_id, request)
+    session = _append_chat_turn(key, "user", message, source="chat")
+
+    latest_hint = _latest_hint_for_key(key)
+    workspace_context = req.workspace_summary or req.workspace_state
+    workspace_text = _workspace_state_summary(workspace_context)
+    chat_history_text = _recent_chat_history_text(session)
+    lower_message = message.lower()
+    explanation_mode = any(
+        phrase in lower_message
+        for phrase in [
+            "don't understand",
+            "do not understand",
+            "explain more",
+            "why is this wrong",
+            "why is that wrong",
+            "why is it wrong",
+            "what does this hint mean",
+        ]
+    )
+
+    prompt_parts = [
+        "You are the Module 1 chat assistant for VisionBlocks.",
+        "Help the student understand dataset exploration and Blockly hints.",
+        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "Do not invent blocks or steps that are not present in the workspace state.",
+    ]
+    if latest_hint:
+        prompt_parts.append(f"Latest hint: {latest_hint}")
+    if explanation_mode:
+        prompt_parts.append(
+            "The student is asking for clarification, so explicitly explain why the latest hint matters and what to inspect in the workspace."
+        )
+    prompt_parts.extend(
+        [
+            f"Workspace state: {workspace_text}",
+            f"Conversation history:\n{chat_history_text}",
+            f"Student message: {message}",
+        ]
+    )
+
+    prompt = "\n\n".join(prompt_parts)
+
+    try:
+        assistant_response = _call_openrouter(prompt).strip()
+    except Exception:
+        if latest_hint:
+            assistant_response = (
+                f"The latest hint is: {latest_hint}. "
+                f"Using the current workspace, I would inspect {workspace_text}."
+            )
+        else:
+            assistant_response = (
+                "Tell me what part feels unclear and I’ll explain it using the current workspace state."
+            )
+
+    if not assistant_response:
+        assistant_response = (
+            "I can help explain the current hint if you point me at the block or question that feels confusing."
+        )
+
+    _append_chat_turn(key, "assistant", assistant_response, source="chat")
+
+    return ChatResponse(
+        assistant_response=assistant_response,
+        last_hint=latest_hint,
+        conversation_length=len(session.turns),
+    )
 
 
 # Module 2 specific analyzer (mirrors apps/web/src/data/module2Stages.ts)
