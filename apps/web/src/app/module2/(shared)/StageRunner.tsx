@@ -82,6 +82,7 @@ type AnalyzerChain = { top_block_type: string | null; blocks: AnalyzerBlock[] };
 type AnalyzeAgentReq = {
   chains: AnalyzerChain[];
   client_signature?: string;
+  user_id?: string;
   stage_id?: string;
 };
 type AnalyzeAgentResp = {
@@ -397,6 +398,10 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const [submitTitle, setSubmitTitle] = useState("Submission");
   const [submitLines, setSubmitLines] = useState<string[]>([]);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [stageCompleteToast, setStageCompleteToast] = useState(false);
+  const [stageConfetti, setStageConfetti] = useState(false);
+  const stageToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stageCompleteShownRef = useRef(false);
 
   // last successful completion toggle (enables Next Stage)
   const [canGoNext, setCanGoNext] = useState(false);
@@ -501,7 +506,36 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       } catch {}
     }, 0);
     return () => clearTimeout(timer);
-  }, [chatPanelOpen, agentHistory]);
+  }, [chatPanelOpen, agentHistory, chatSending, aiAssistantLoading]);
+
+  useEffect(() => {
+    if (!stage || checkItems.length === 0) return;
+    const allOk = checkItems.every((i) => i.state === "ok");
+    if (allOk && !stageCompleteShownRef.current) {
+      stageCompleteShownRef.current = true;
+      if (stageToastTimerRef.current) {
+        clearTimeout(stageToastTimerRef.current);
+      }
+      setStageCompleteToast(true);
+      setStageConfetti(true);
+      stageToastTimerRef.current = setTimeout(() => {
+        setStageCompleteToast(false);
+        setStageConfetti(false);
+      }, 7000);
+    }
+    if (!allOk) {
+      stageCompleteShownRef.current = false;
+    }
+  }, [stage, checkItems]);
+
+  useEffect(() => {
+    stageCompleteShownRef.current = false;
+    if (stageToastTimerRef.current) {
+      clearTimeout(stageToastTimerRef.current);
+    }
+    setStageCompleteToast(false);
+    setStageConfetti(false);
+  }, [stageId]);
 
   // Send chat message to Module 2 backend
   async function sendChatMessage(text: string) {
@@ -587,6 +621,60 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         35%  { transform: translateY(-6px) scale(1.04); box-shadow: 0 14px 30px rgba(56,189,248,0.7); }
         100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(56,189,248,0); }
       }
+      @keyframes vb-think-dot {
+        0%, 100% { transform: translateY(0); opacity: 0.45; }
+        50% { transform: translateY(-2px); opacity: 1; }
+      }
+      @keyframes vb-achieve-pop {
+        0% { transform: translateY(8px) scale(0.92); opacity: 0; }
+        60% { transform: translateY(0) scale(1.02); opacity: 1; }
+        100% { transform: translateY(0) scale(1); opacity: 1; }
+      }
+      @keyframes vb-achieve-glow {
+        0%, 100% { box-shadow: 0 22px 60px rgba(15,23,42,0.18); }
+        50% { box-shadow: 0 28px 80px rgba(56,189,248,0.32); }
+      }
+      @keyframes vb-achieve-sparkle {
+        0% { transform: scale(0.2) rotate(0deg); opacity: 0; }
+        40% { opacity: 0.9; }
+        100% { transform: scale(1.1) rotate(18deg); opacity: 0; }
+      }
+      @keyframes vb-confetti-fall {
+        0% { transform: translateY(-10vh) rotate(0deg); opacity: 0; }
+        10% { opacity: 1; }
+        100% { transform: translateY(110vh) rotate(240deg); opacity: 0; }
+      }
+      .vb-confetti-layer {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 998;
+        overflow: hidden;
+      }
+      .vb-confetti-piece {
+        position: absolute;
+        top: -10vh;
+        width: 8px;
+        height: 14px;
+        border-radius: 2px;
+        animation: vb-confetti-fall 3.6s linear forwards;
+      }
+      .vb-achieve-card {
+        animation: vb-achieve-pop 0.45s ease-out, vb-achieve-glow 2.4s ease-in-out infinite;
+      }
+      .vb-achieve-sparkle {
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        border-radius: 4px;
+        background: radial-gradient(circle, rgba(251,191,36,0.9) 0%, rgba(56,189,248,0.9) 50%, rgba(255,255,255,0) 70%);
+        animation: vb-achieve-sparkle 1.6s ease-in-out infinite;
+        opacity: 0;
+      }
+      .vb-achieve-sparkle-1 { top: -8px; left: 20px; animation-delay: 0.1s; }
+      .vb-achieve-sparkle-2 { top: 10px; right: 28px; animation-delay: 0.4s; }
+      .vb-achieve-sparkle-3 { bottom: -6px; left: 40%; animation-delay: 0.7s; }
+      .vb-achieve-sparkle-4 { bottom: 12px; right: 18px; animation-delay: 0.9s; }
       .vb-baymax-bump {
         animation: vb-baymax-pop 0.5s ease-out;
       }
@@ -698,6 +786,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
         chains,
         stage_id: sid,
         client_signature: `module2-stage${sid}-live`,
+        user_id: window.localStorage.getItem("vb_user_id") || "anon",
       };
 
       const sig = JSON.stringify(payload);
@@ -2098,6 +2187,9 @@ function updateBaymaxFromChecklist(
 
   /* ---------- UI ---------- */
 
+  const confettiColors = ["#f97316", "#fbbf24", "#22c55e", "#38bdf8", "#a855f7", "#f43f5e"];
+  const confettiPieces = Array.from({ length: 18 }, (_, i) => i);
+
   const chatSignal = !chatPanelOpen
     ? aiAssistantLoading
       ? "thinking"
@@ -2118,8 +2210,56 @@ function updateBaymaxFromChecklist(
 
   if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
 
+  const stageCompleteTitle =
+    String(stage.id) === "1"
+      ? "Stage 1 Complete!"
+      : String(stage.id) === "2"
+      ? "Stage 2 Complete!"
+      : String(stage.id) === "3"
+      ? "Stage 3 Complete!"
+      : "Quiz Complete!";
+
+  const stageCompleteBody =
+    String(stage.id) === "1"
+      ? "Nice work. Head to Stage 2 next."
+      : String(stage.id) === "2"
+      ? "Great job. Move on to Stage 3."
+      : String(stage.id) === "3"
+      ? "Ready for the quiz stage. Test yourself next."
+      : "You finished the quiz. Head to Module 3 now.";
+
   return (
     <div className="h-[100dvh] w-full bg-[#E3E7F5] overflow-hidden">
+      {stageConfetti && (
+        <div className="vb-confetti-layer">
+          {confettiPieces.map((i) => (
+            <span
+              key={i}
+              className="vb-confetti-piece"
+              style={{
+                left: `${(i * 7) % 100}%`,
+                backgroundColor: confettiColors[i % confettiColors.length],
+                animationDelay: `${i * 0.12}s`,
+              }}
+            />
+          ))}
+        </div>
+      )}
+      {stageCompleteToast && (
+        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/25 backdrop-blur-sm">
+          <div className="vb-achieve-card relative mx-4 w-[92%] max-w-xl rounded-3xl border border-sky-100 bg-white/95 px-8 py-7 text-center">
+            <span className="vb-achieve-sparkle vb-achieve-sparkle-1" />
+            <span className="vb-achieve-sparkle vb-achieve-sparkle-2" />
+            <span className="vb-achieve-sparkle vb-achieve-sparkle-3" />
+            <span className="vb-achieve-sparkle vb-achieve-sparkle-4" />
+            <div className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-600">
+              Achievement unlocked
+            </div>
+            <div className="mt-3 text-2xl font-semibold text-slate-900">{stageCompleteTitle}</div>
+            <div className="mt-2 text-sm text-slate-600">{stageCompleteBody}</div>
+          </div>
+        </div>
+      )}
       {/* Top nav – styled like Module 1’s, but for Module 2 */}
       <header className="fixed top-0 left-0 right-0 z-20 backdrop-blur-xl bg-white/70 border-b border-white/60 shadow-sm">
         <div className="max-w-[1400px] mx-auto px-4 lg:px-5 h-14 flex items-center justify-between">
@@ -2272,12 +2412,6 @@ function updateBaymaxFromChecklist(
                           </div>
                           <div className="flex items-center gap-2">
                             <button
-                              className="rounded-full px-3 py-1 text-[11px] font-semibold text-sky-700 hover:bg-white hover:text-sky-800 transition"
-                              onClick={() => setAgentHistoryOpen(true)}
-                            >
-                              History
-                            </button>
-                            <button
                               className="rounded-full p-2 text-slate-500 hover:bg-white hover:text-slate-700 transition"
                               onClick={() => setChatPanelOpen(false)}
                               aria-label="Close chat"
@@ -2314,6 +2448,20 @@ function updateBaymaxFromChecklist(
                               </div>
                             );
                           })}
+                          {aiAssistantLoading && !chatSending && (
+                            <div className="flex justify-start">
+                              <div className="rounded-2xl bg-slate-100 border border-slate-200 px-3 py-2 shadow-sm">
+                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70 text-slate-600">
+                                  NeuraBuddy
+                                </div>
+                                <div className="flex items-center gap-1.5 py-1">
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite]" />
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.15s]" />
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.3s]" />
+                                </div>
+                              </div>
+                            </div>
+                          )}
                           {chatSending && (
                             <div className="flex justify-start">
                               <div className="rounded-2xl bg-slate-100 border border-slate-200 px-3 py-2 shadow-sm">

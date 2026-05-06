@@ -37,6 +37,8 @@ class AnalyzeRequest(BaseModel):
     chains: List[ChainModel]
     # optional client-side signature to help debugging / caching
     client_signature: Optional[str] = None
+    # optional user id to align chat memory with analyzer hints
+    user_id: Optional[str] = None
     # optional stage id for stage-aware tutoring (module 2)
     stage_id: Optional[str] = None
 
@@ -633,9 +635,9 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
     if not next_missing_key and not wrong_place:
         prompt = (
             "You are a tutor for Module 1 (dataset exploration). "
-            "The checklist shows everything is complete and in order. "
-            "Respond with 1-2 sentences confirming the chain is complete and why the flow is good. "
-            "You may mention block names. Be positive and concise."
+            "The checklist shows everything is complete. "
+            "Respond with 1-2 short sentences: congratulate them, say the chain is complete, "
+            "and tell them to Submit & Run, then go to Module 2."
         ) + shared_context
     elif next_missing_key == "dataset.select" and not wrong_place:
         prompt = (
@@ -665,7 +667,7 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
         "Module 1 goal: help students inspect a dataset in this order: "
         "dataset.select -> dataset.info -> dataset.class_counts -> "
         "dataset.class_distribution_preview -> dataset.sample_image -> image.channels_split. "
-        "Given the checklist and planned actions, respond with 2-3 sentences. "
+        "Given the checklist and planned actions, respond with 1-2 short sentences. "
         "First, briefly comment on the most recently added block (Last block). "
         "Then give a hint for ONLY the next missing step and explain briefly why it matters. "
         "Mention the relevant block name indirectly (blend it into the sentence), "
@@ -681,7 +683,11 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
         f"Checklist: {json.dumps([c.dict() for c in analyzer.checklist], ensure_ascii=True)}\n"
         f"Planned actions: {json.dumps([a.dict() for a in analyzer.planned_actions], ensure_ascii=True)}\n"
         ) + shared_context
+    prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
+    prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
+    prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
     agent_text = _call_openrouter(prompt)
+    agent_text = _strip_healthcare_claims(agent_text)
 
     history.last_hint = agent_text
     _HISTORY[key] = history
@@ -720,8 +726,9 @@ def chat(req: ChatRequest, request: Request):
     prompt_parts = [
         "You are the Module 1 chat assistant for VisionBlocks.",
         "Help the student understand dataset exploration and Blockly hints.",
-        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "Answer in 1-2 short sentences. Be direct and grounded in the current workspace.",
         "Do not invent blocks or steps that are not present in the workspace state.",
+        "No greetings or extra encouragement; keep it concise.",
     ]
     if latest_hint:
         prompt_parts.append(f"Latest hint: {latest_hint}")
@@ -835,7 +842,7 @@ def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
     _M4_STAGE_HISTORY[key] = history
 
     # Record the generated hint into module-scoped chat memory (prefix m4)
-    chat_key = _module_chat_key("m4", key, request)
+    chat_key = _module_chat_key("m4", req.user_id or "", request)
     _record_hint_in_chat_memory(chat_key, agent_text)
 
     return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
@@ -872,8 +879,10 @@ def module4_chat(req: ChatRequest, request: Request):
     prompt_parts = [
         "You are the Module 4 chat assistant for VisionBlocks.",
         "Help the student understand model-building, training, and evaluation blocks in Blockly.",
-        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "Answer in 1-2 short sentences. Be direct and grounded in the current workspace.",
         "Do not invent blocks or steps that are not present in the workspace state.",
+        "Do not say you are a healthcare or health care companion.",
+        "No greetings or extra encouragement; keep it concise.",
     ]
     if latest_hint:
         prompt_parts.append(f"Latest hint: {latest_hint}")
@@ -907,6 +916,8 @@ def module4_chat(req: ChatRequest, request: Request):
         assistant_response = (
             "I can help explain the current hint if you point me at the block or question that feels confusing."
         )
+
+    assistant_response = _strip_healthcare_claims(assistant_response)
 
     _append_chat_turn(key, "assistant", assistant_response, source="chat")
 
@@ -1558,6 +1569,29 @@ def _sanitize_m4_agent_text(text: str) -> str:
     return text
 
 
+def _strip_healthcare_claims(text: str) -> str:
+    if not text:
+        return text
+    lowered = text.lower()
+    banned = [
+        "health care companion",
+        "healthcare companion",
+        "health-care companion",
+        "i am your healthcare companion",
+        "i am your health care companion",
+    ]
+    if not any(b in lowered for b in banned):
+        return text
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    cleaned_lines = [
+        ln
+        for ln in lines
+        if not any(b in ln.lower() for b in banned)
+    ]
+    return "\n".join(cleaned_lines) or "I'm here to help with your module task."
+
+
 def _analyze_module4_stage_problem(req: AnalyzeRequest, stage_id: str) -> Dict[str, Any]:
     primary_chain = _find_primary_chain(req)
     chain_blocks = primary_chain.blocks if primary_chain else []
@@ -1824,8 +1858,10 @@ def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
     # otherwise provide a deterministic fallback message.
     if 'prompt' in locals() and prompt:
         try:
+            prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
             raw = _call_openrouter(prompt)
             agent_text = _sanitize_m4_agent_text(raw)
+            agent_text = _strip_healthcare_claims(agent_text)
         except Exception as exc:  # keep endpoint stable when LLM fails
             agent_text = f"LLM error: {str(exc)}"
     else:
@@ -1846,6 +1882,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
         stage_id = "1"
 
     key = _history_key(req, request) + f":module2-stage{stage_id}"
+    chat_key = _chat_history_key(req.user_id or "", request) + f":module2-stage{stage_id}"
     history = _M2_STAGE_HISTORY.get(key) or _Module2StageHistory()
 
     stage_problem = _analyze_module2_stage_problem(req, stage_id)
@@ -1943,8 +1980,13 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 "Give one indirect hint only, without naming the exact code identifier. Respond in 2-3 short sentences, no bullets, friendly tone."
             ) + common_context
 
+        prompt = (
+            "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
+            "Do not say you are a healthcare or health care companion.\n\n"
+        ) + prompt
         agent_text = _call_openrouter(prompt)
         agent_text = _sanitize_m2_agent_text(agent_text)
+        agent_text = _strip_healthcare_claims(agent_text)
         history.last_hint = agent_text
         _M2_STAGE_HISTORY[key] = history
         return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
@@ -2108,13 +2150,18 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 "Respond in 2-3 short sentences, no bullets, friendly tone."
             ) + common_context
 
-    agent_text = _call_openrouter(prompt)
+        prompt = (
+            "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
+            "Do not say you are a healthcare or health care companion.\n\n"
+        ) + prompt
+        agent_text = _call_openrouter(prompt)
     agent_text = _sanitize_m2_agent_text(agent_text)
+    agent_text = _strip_healthcare_claims(agent_text)
     history.last_hint = agent_text
     _M2_STAGE_HISTORY[key] = history
     # Also record the hint into the chat memory for module2 so the chat endpoint can reference it
     try:
-        _record_hint_in_chat_memory(key, agent_text)
+        _record_hint_in_chat_memory(chat_key, agent_text)
     except Exception:
         pass
 
@@ -2157,11 +2204,28 @@ def module2_chat(req: Module2ChatRequest, request: Request):
     )
 
     prompt_parts = [
-        "You are the Module 2 chat assistant for VisionBlocks.",
-        "Help the student understand Module 2 preprocessing pipeline and Blockly hints (grayscale/brightness/blur/resize/pad/normalize/loop).",
-        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "You are a tutor for VisionBlocks Module 2 (image preprocessing).",
+        "Help the student understand the preprocessing pipeline and Blockly hints.",
+        "Answer in 1-2 short sentences. Be direct and grounded in the current workspace.",
         "Do not invent blocks or steps that are not present in the workspace state.",
+        "Do not say you are a healthcare or health care companion.",
+        "No greetings or extra encouragement; keep it concise.",
     ]
+    if stage_id in {"1", "2", "4"}:
+        prompt_parts.append(
+            "Correct order for this pipeline is: grayscale → brightness/contrast → blur/sharpen → resize → pad → normalize."
+        )
+    if stage_id == "3":
+        prompt_parts.append(
+            "Stage 3 uses a loop over the dataset; the preprocessing chain belongs inside the loop and export happens after the loop."
+        )
+    if stage_id == "4":
+        prompt_parts.append(
+            "This is a quiz: the chain is already built and only the normalize block is missing."
+        )
+        prompt_parts.append(
+            "Normalize must come AFTER pad. Do not say pad is the last step."
+        )
     if latest_hint:
         prompt_parts.append(f"Latest hint: {latest_hint}")
     if explanation_mode:
@@ -2193,6 +2257,9 @@ def module2_chat(req: Module2ChatRequest, request: Request):
         assistant_response = (
             "I can help explain the current hint if you point me at the block or question that feels confusing."
         )
+
+    assistant_response = _sanitize_m2_agent_text(assistant_response)
+    assistant_response = _strip_healthcare_claims(assistant_response)
 
     _append_chat_turn(key, "assistant", assistant_response, source="chat")
 
