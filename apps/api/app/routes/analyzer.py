@@ -227,6 +227,11 @@ def _chat_history_key(user_id: str, request: Request) -> str:
     return f"ip:{client}"
 
 
+def _module_chat_key(prefix: str, user_id: str, request: Request) -> str:
+    base = _chat_history_key(user_id, request)
+    return f"{prefix}:{base}"
+
+
 def _get_chat_session(key: str) -> _ChatSession:
     session = _CHAT_HISTORY.get(key)
     if session is None:
@@ -507,7 +512,8 @@ def _call_openrouter(prompt: str) -> str:
 
     for attempt in range(max_attempts):
         try:
-            resp = requests.post(url, headers=headers, json=chat_payload, timeout=60)
+            # Increased timeout to allow heavier reasoning for module-specific agents
+            resp = requests.post(url, headers=headers, json=chat_payload, timeout=120)
         except requests.RequestException as exc:
             last_error = exc
         else:
@@ -539,7 +545,7 @@ def _call_openrouter(prompt: str) -> str:
                     )
                     if requires_alt_shape:
                         try:
-                            alt = requests.post(url, headers=headers, json=prompt_payload, timeout=60)
+                            alt = requests.post(url, headers=headers, json=prompt_payload, timeout=120)
                             alt.raise_for_status()
                             alt_data = alt.json()
                             if isinstance(alt_data, dict) and alt_data.get("choices"):
@@ -740,6 +746,157 @@ def chat(req: ChatRequest, request: Request):
             assistant_response = (
                 f"The latest hint is: {latest_hint}. "
                 f"Using the current workspace, I would inspect {workspace_text}."
+            )
+        else:
+            assistant_response = (
+                "Tell me what part feels unclear and I’ll explain it using the current workspace state."
+            )
+
+    if not assistant_response:
+        assistant_response = (
+            "I can help explain the current hint if you point me at the block or question that feels confusing."
+        )
+
+    _append_chat_turn(key, "assistant", assistant_response, source="chat")
+
+    return ChatResponse(
+        assistant_response=assistant_response,
+        last_hint=latest_hint,
+        conversation_length=len(session.turns),
+    )
+
+
+@router.post("/analyze/module4/agent", response_model=AnalyzeAgentResponse)
+def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
+    # Reuse the generic workspace analyzer to build checklist/planned actions
+    analyzer = analyze_workspace(req)
+    now = time.time()
+    key = _history_key(req, request)
+    history = _M4_STAGE_HISTORY.get(key) or _Module2StageHistory()
+
+    # Simple repetition tracking (mirror Module1 logic)
+    next_missing_key = _get_next_missing_key(analyzer.checklist)
+    wrong_place = any(c.state == "wrong_place" for c in analyzer.checklist)
+
+    if not next_missing_key and not wrong_place:
+        history.last_problem_key = None
+        history.repeat_count = 0
+
+    if history.last_problem_key == next_missing_key and history.repeat_count:
+        history.repeat_count += 1
+    else:
+        history.repeat_count = 0
+
+    history.last_problem_key = next_missing_key
+    history.last_seen = now
+
+    # Build module-4 specific prompt
+    chain_order = ""
+    last_block_type = ""
+    if analyzer.chains:
+        chain = analyzer.chains[0].blocks
+        if chain:
+            chain_order = " -> ".join(b.type for b in chain)
+            last_block_type = chain[-1].type
+
+    dataset_summary = _summarize_dataset(
+        next((b.fields.get("DATASET") or b.fields.get("dataset") for b in analyzer.chains[0].blocks if b.type == "dataset.select"), None)
+        if analyzer.chains
+        else None
+    )
+
+    shared_context = (
+        f"\n\nChain order: {chain_order or 'empty'}. "
+        f"Last block: {last_block_type or 'none'}. "
+        f"{dataset_summary}. "
+        f"Stage history: last_problem={history.last_problem_key}, repeat_count={history.repeat_count}."
+    )
+
+    # Module 4 aims: model building, training, evaluation, prediction
+    if not next_missing_key and not wrong_place:
+        prompt = (
+            "You are a tutor for Module 4 (model building & training). "
+            "The checklist shows the main pipeline is complete. Respond with 1-3 concise sentences explaining why the pipeline looks correct and what to check next when running training."
+        ) + shared_context
+    elif wrong_place:
+        prompt = (
+            "You are a tutor for Module 4 (model building & training). "
+            "The student has blocks in the wrong order. Explain, in 1-3 sentences, why ordering matters (split → model → train → eval → predict) and which area to inspect."
+        ) + shared_context
+    else:
+        prompt = (
+            "You are a tutor for Module 4 (model building & training). "
+            "Given the checklist and planned actions, produce 2-4 short sentences: briefly comment on the most recently added block, then give a targeted next-step hint and why it matters for model training or evaluation. Keep it gentle and concrete."
+        ) + shared_context
+
+    agent_text = _call_openrouter(prompt)
+
+    history.last_hint = agent_text
+    _M4_STAGE_HISTORY[key] = history
+
+    # Record the generated hint into module-scoped chat memory (prefix m4)
+    chat_key = _module_chat_key("m4", key, request)
+    _record_hint_in_chat_memory(chat_key, agent_text)
+
+    return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
+
+
+@router.post("/module4/chat", response_model=ChatResponse)
+def module4_chat(req: ChatRequest, request: Request):
+    message = req.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    # Use module-scoped chat key so memory is isolated to Module 4
+    base_key = _chat_history_key(req.user_id, request)
+    key = _module_chat_key("m4", req.user_id or base_key, request)
+
+    session = _append_chat_turn(key, "user", message, source="chat")
+
+    latest_hint = _latest_hint_for_key(key)
+    workspace_context = req.workspace_summary or req.workspace_state
+    workspace_text = _workspace_state_summary(workspace_context)
+    chat_history_text = _recent_chat_history_text(session)
+    lower_message = message.lower()
+    explanation_mode = any(
+        phrase in lower_message
+        for phrase in [
+            "don't understand",
+            "do not understand",
+            "explain more",
+            "why is this wrong",
+            "what does this hint mean",
+        ]
+    )
+
+    prompt_parts = [
+        "You are the Module 4 chat assistant for VisionBlocks.",
+        "Help the student understand model-building, training, and evaluation blocks in Blockly.",
+        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "Do not invent blocks or steps that are not present in the workspace state.",
+    ]
+    if latest_hint:
+        prompt_parts.append(f"Latest hint: {latest_hint}")
+    if explanation_mode:
+        prompt_parts.append(
+            "The student requests clarification—explain why the latest hint matters and what to inspect in the workspace."
+        )
+    prompt_parts.extend(
+        [
+            f"Workspace state: {workspace_text}",
+            f"Conversation history:\n{chat_history_text}",
+            f"Student message: {message}",
+        ]
+    )
+
+    prompt = "\n\n".join(prompt_parts)
+
+    try:
+        assistant_response = _call_openrouter(prompt).strip()
+    except Exception:
+        if latest_hint:
+            assistant_response = (
+                f"The latest hint is: {latest_hint}. Using the current workspace, I would inspect {workspace_text}."
             )
         else:
             assistant_response = (
