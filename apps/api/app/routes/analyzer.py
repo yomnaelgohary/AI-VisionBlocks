@@ -773,81 +773,6 @@ def chat(req: ChatRequest, request: Request):
     )
 
 
-@router.post("/analyze/module4/agent", response_model=AnalyzeAgentResponse)
-def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
-    # Reuse the generic workspace analyzer to build checklist/planned actions
-    analyzer = analyze_workspace(req)
-    now = time.time()
-    key = _history_key(req, request)
-    history = _M4_STAGE_HISTORY.get(key) or _Module2StageHistory()
-
-    # Simple repetition tracking (mirror Module1 logic)
-    next_missing_key = _get_next_missing_key(analyzer.checklist)
-    wrong_place = any(c.state == "wrong_place" for c in analyzer.checklist)
-
-    if not next_missing_key and not wrong_place:
-        history.last_problem_key = None
-        history.repeat_count = 0
-
-    if history.last_problem_key == next_missing_key and history.repeat_count:
-        history.repeat_count += 1
-    else:
-        history.repeat_count = 0
-
-    history.last_problem_key = next_missing_key
-    history.last_seen = now
-
-    # Build module-4 specific prompt
-    chain_order = ""
-    last_block_type = ""
-    if analyzer.chains:
-        chain = analyzer.chains[0].blocks
-        if chain:
-            chain_order = " -> ".join(b.type for b in chain)
-            last_block_type = chain[-1].type
-
-    dataset_summary = _summarize_dataset(
-        next((b.fields.get("DATASET") or b.fields.get("dataset") for b in analyzer.chains[0].blocks if b.type == "dataset.select"), None)
-        if analyzer.chains
-        else None
-    )
-
-    shared_context = (
-        f"\n\nChain order: {chain_order or 'empty'}. "
-        f"Last block: {last_block_type or 'none'}. "
-        f"{dataset_summary}. "
-        f"Stage history: last_problem={history.last_problem_key}, repeat_count={history.repeat_count}."
-    )
-
-    # Module 4 aims: model building, training, evaluation, prediction
-    if not next_missing_key and not wrong_place:
-        prompt = (
-            "You are a tutor for Module 4 (model building & training). "
-            "The checklist shows the main pipeline is complete. Respond with 1-3 concise sentences explaining why the pipeline looks correct and what to check next when running training."
-        ) + shared_context
-    elif wrong_place:
-        prompt = (
-            "You are a tutor for Module 4 (model building & training). "
-            "The student has blocks in the wrong order. Explain, in 1-3 sentences, why ordering matters (split → model → train → eval → predict) and which area to inspect."
-        ) + shared_context
-    else:
-        prompt = (
-            "You are a tutor for Module 4 (model building & training). "
-            "Given the checklist and planned actions, produce 2-4 short sentences: briefly comment on the most recently added block, then give a targeted next-step hint and why it matters for model training or evaluation. Keep it gentle and concrete."
-        ) + shared_context
-
-    agent_text = _call_openrouter(prompt)
-
-    history.last_hint = agent_text
-    _M4_STAGE_HISTORY[key] = history
-
-    # Record the generated hint into module-scoped chat memory (prefix m4)
-    chat_key = _module_chat_key("m4", req.user_id or "", request)
-    _record_hint_in_chat_memory(chat_key, agent_text)
-
-    return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
-
-
 @router.post("/module4/chat", response_model=ChatResponse)
 def module4_chat(req: ChatRequest, request: Request):
     message = req.message.strip()
@@ -916,6 +841,8 @@ def module4_chat(req: ChatRequest, request: Request):
         assistant_response = (
             "I can help explain the current hint if you point me at the block or question that feels confusing."
         )
+
+    assistant_response = _strip_healthcare_claims(assistant_response)
 
     assistant_response = _strip_healthcare_claims(assistant_response)
 
