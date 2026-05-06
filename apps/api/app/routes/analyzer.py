@@ -1955,5 +1955,94 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     agent_text = _sanitize_m2_agent_text(agent_text)
     history.last_hint = agent_text
     _M2_STAGE_HISTORY[key] = history
+    # Also record the hint into the chat memory for module2 so the chat endpoint can reference it
+    try:
+        _record_hint_in_chat_memory(key, agent_text)
+    except Exception:
+        pass
 
     return AnalyzeAgentResponse(analyzer=analyzer, agent_text=agent_text)
+
+
+class Module2ChatRequest(BaseModel):
+    user_id: str
+    message: str
+    workspace_state: Optional[Dict[str, Any]] = None
+    workspace_summary: Optional[Dict[str, Any]] = None
+    stage_id: Optional[str] = None
+
+
+@router.post("/module2/chat", response_model=ChatResponse)
+def module2_chat(req: Module2ChatRequest, request: Request):
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    stage_id = str(req.stage_id or "1")
+    key = _chat_history_key(req.user_id or "", request) + f":module2-stage{stage_id}"
+    session = _append_chat_turn(key, "user", message, source="chat")
+
+    latest_hint = _latest_hint_for_key(key)
+    workspace_context = req.workspace_summary or req.workspace_state
+    workspace_text = _workspace_state_summary(workspace_context)
+    chat_history_text = _recent_chat_history_text(session)
+
+    lower_message = message.lower()
+    explanation_mode = any(
+        phrase in lower_message
+        for phrase in [
+            "don't understand",
+            "do not understand",
+            "explain more",
+            "why is this wrong",
+            "what does this hint mean",
+        ]
+    )
+
+    prompt_parts = [
+        "You are the Module 2 chat assistant for VisionBlocks.",
+        "Help the student understand Module 2 preprocessing pipeline and Blockly hints (grayscale/brightness/blur/resize/pad/normalize/loop).",
+        "Answer in 2-5 short sentences. Keep the tone friendly, concrete, and grounded in the current workspace.",
+        "Do not invent blocks or steps that are not present in the workspace state.",
+    ]
+    if latest_hint:
+        prompt_parts.append(f"Latest hint: {latest_hint}")
+    if explanation_mode:
+        prompt_parts.append(
+            "The student is asking for clarification, so explicitly explain why the latest hint matters and what to inspect in the workspace."
+        )
+    prompt_parts.extend([
+        f"Workspace state: {workspace_text}",
+        f"Conversation history:\n{chat_history_text}",
+        f"Student message: {message}",
+    ])
+
+    prompt = "\n\n".join(prompt_parts)
+
+    try:
+        assistant_response = _call_openrouter(prompt).strip()
+    except Exception:
+        if latest_hint:
+            assistant_response = (
+                f"The latest hint is: {latest_hint}. "
+                f"Using the current workspace, I would inspect {workspace_text}."
+            )
+        else:
+            assistant_response = (
+                "Tell me what part feels unclear and I’ll explain it using the current workspace state."
+            )
+
+    if not assistant_response:
+        assistant_response = (
+            "I can help explain the current hint if you point me at the block or question that feels confusing."
+        )
+
+    _append_chat_turn(key, "assistant", assistant_response, source="chat")
+
+    session = _CHAT_HISTORY.get(key) or _get_chat_session(key)
+
+    return ChatResponse(
+        assistant_response=assistant_response,
+        last_hint=latest_hint,
+        conversation_length=len(session.turns) if session else 0,
+    )

@@ -8,7 +8,6 @@ import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 import { toolboxJsonModule2 } from "@/components/toolboxModule2";
 
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
-import PixelwiseCharacter from "@/components/PixelwiseCharacter";
 import InfoModal from "@/components/InfoModal";
 import SubmissionModal from "@/components/SubmissionModal";
 import MissionChecklistStage, {
@@ -92,6 +91,85 @@ type AnalyzeAgentResp = {
   agent_text: string;
 };
 
+type ChatRole = "user" | "assistant";
+
+type ChatEntry = {
+  ts: number;
+  role: ChatRole;
+  text: string;
+  source?: "hint" | "chat";
+};
+
+type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
+
+function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
+  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+  const chains: BlocklyBlock[][] = [];
+  for (const top of tops) {
+    const chain: BlocklyBlock[] = [];
+    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) chain.push(b);
+    chains.push(chain);
+  }
+  return chains;
+}
+
+function blockToAnalyzerModel(b: BlocklyBlock): AnalyzerBlock {
+  const fields: Record<string, unknown> = {};
+  for (const input of b.inputList || []) {
+    for (const field of input.fieldRow || []) {
+      const name = (field as any).name as string | undefined;
+      if (!name) continue;
+      const val = (field as any).getValue?.() ?? (field as any).getText?.();
+      fields[name] = val;
+    }
+  }
+  return { type: b.type, fields };
+}
+
+const hasType = (chain: BlocklyBlock[], type: string) => chain.some((b) => b.type === type);
+const indexOfType = (chain: BlocklyBlock[], type: string) => chain.findIndex((b) => b.type === type);
+const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) => {
+  const a = indexOfType(chain, beforeType);
+  const b = indexOfType(chain, targetType);
+  return a !== -1 && b !== -1 && b > a;
+};
+
+function findFirstPipelineTop(ws: WorkspaceSvg | null): BlocklyBlock | null {
+  if (!ws) return null;
+  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+  for (const top of tops) {
+    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
+      if (b.type && b.type.startsWith("m2.")) return top;
+    }
+  }
+  return null;
+}
+
+function walkConnectedChainFrom(top: BlocklyBlock | null): string[] {
+  const types: string[] = [];
+  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) types.push(b.type);
+  return types;
+}
+
+function findBlockByTypeInChain(top: BlocklyBlock | null, type: string): BlocklyBlock | null {
+  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) if (b.type === type) return b;
+  return null;
+}
+
+function buildTargetOpsForStage(s: StageConfig): OpSpec[] | undefined {
+  return (s as any).targetOps ?? undefined;
+}
+
+function pickLine(options: string[], key: string): string {
+  if (!options.length) return "";
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % options.length;
+  return options[idx];
+}
+
 /* ----------------- Blockly → ops ----------------- */
 function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
   const ops: OpSpec[] = [];
@@ -141,20 +219,6 @@ function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
           b: Number(b.getFieldValue("B") || 0),
         } as any);
         break;
-      case "m2.brightness_contrast":
-        ops.push({
-          type: "brightness_contrast",
-          b: Number(b.getFieldValue("B") || 0),
-          c: Number(b.getFieldValue("C") || 0),
-        } as any);
-        break;
-      case "m2.blur_sharpen":
-        ops.push({
-          type: "blur_sharpen",
-          blur: Number(b.getFieldValue("BLUR") || 0),
-          sharp: Number(b.getFieldValue("SHARP") || 0),
-        } as any);
-        break;
       case "m2.edges":
         ops.push({
           type: "edges",
@@ -174,166 +238,8 @@ function blocksToOps(first: BlocklyBlock | null): OpSpec[] {
     }
     b = b.getNextBlock();
   }
+
   return ops;
-}
-
-/* ----------------- chain helpers ----------------- */
-function walkConnectedChainFrom(top: BlocklyBlock | null): string[] {
-  const seq: string[] = [];
-  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) seq.push(b.type);
-  return seq;
-}
-
-function findBlockByTypeInChain(
-  top: BlocklyBlock | null,
-  type: string
-): BlocklyBlock | null {
-  for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock())
-    if (b.type === type) return b;
-  return null;
-}
-
-function findFirstPipelineTop(ws: WorkspaceSvg): BlocklyBlock | null {
-  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
-
-  // Use the chain connected under dataset -> sample as the authoritative pipeline.
-  // This avoids mismatches when users have detached m2 blocks elsewhere.
-  for (const top of tops) {
-    let sawDataset = false;
-    let sawSample = false;
-    let afterSample = false;
-
-    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-      if (b.type === "dataset.select") {
-        sawDataset = true;
-      }
-      if (b.type === "dataset.sample_image") {
-        sawSample = true;
-        afterSample = true;
-        continue;
-      }
-      if (afterSample && b.type.startsWith("m2.")) {
-        return top;
-      }
-    }
-
-    // If chain has dataset+sample but no m2 blocks after sample, it isn't a pipeline yet.
-    if (sawDataset && sawSample) {
-      return null;
-    }
-  }
-
-  // No valid connected pipeline found.
-  return null;
-}
-
-function findBlockByType(ws: WorkspaceSvg, type: string): BlocklyBlock | null {
-  const blocks = ws.getAllBlocks(false) as BlocklyBlock[];
-  return blocks.find((b) => b.type === type) || null;
-}
-
-// For dataset-chain inspection (like Module 1)
-function getTopChains(ws: WorkspaceSvg): BlocklyBlock[][] {
-  const tops = ws.getTopBlocks(true) as BlocklyBlock[];
-  const chains: BlocklyBlock[][] = [];
-  for (const top of tops) {
-    const chain: BlocklyBlock[] = [];
-    for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) chain.push(b);
-    chains.push(chain);
-  }
-  return chains;
-}
-
-function blockToAnalyzerModel(b: BlocklyBlock): AnalyzerBlock {
-  const fields: Record<string, unknown> = {};
-  for (const input of b.inputList || []) {
-    for (const field of input.fieldRow || []) {
-      const name = (field as any).name as string | undefined;
-      if (!name) continue;
-      fields[name] = (field as any).getValue?.() ?? (field as any).getText?.();
-    }
-  }
-  return { type: b.type, fields };
-}
-const hasType = (chain: BlocklyBlock[], type: string) =>
-  chain.some((b) => b.type === type);
-const indexOfType = (chain: BlocklyBlock[], type: string) =>
-  chain.findIndex((b) => b.type === type);
-const isAfter = (chain: BlocklyBlock[], beforeType: string, targetType: string) => {
-  const a = indexOfType(chain, beforeType);
-  const b = indexOfType(chain, targetType);
-  return a !== -1 && b !== -1 && b > a;
-};
-
-/* ----------------- Baymax mood ----------------- */
-type BaymaxMood = "neutral" | "hint" | "warning" | "success" | "error";
-
-/* Small helper so Baymax can vary his lines deterministically */
-function pickLine(options: string[], key: string): string {
-  if (!options.length) return "";
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) {
-    hash = (hash * 31 + key.charCodeAt(i)) | 0;
-  }
-  const idx = Math.abs(hash) % options.length;
-  return options[idx];
-}
-
-
-/* ----------------- Stage target ops helper ----------------- */
-/**
- * Build the ops used to generate the TARGET image.
- * For Stage 2 we force a true 150×150 resize AND 150×150 pad
- * so the visual goal always shows a clean square frame.
- */
-function buildTargetOpsForStage(stage: StageConfig): OpSpec[] | undefined {
-  if (!stage.targetOps) return undefined;
-
-  const stageKey = String(stage.id);
-  const base = stage.targetOps.map((op) => ({ ...(op as any) })) as OpSpec[];
-
-  if (stageKey === "2") {
-    let hasResize = false;
-    let hasPad = false;
-
-    for (const op of base as any[]) {
-      if (op.type === "resize") {
-        op.mode = "size";
-        op.w = 150;
-        op.h = 150;
-        hasResize = true;
-      }
-      if (op.type === "pad") {
-        op.w = 150;
-        op.h = 150;
-        hasPad = true;
-      }
-    }
-
-    if (!hasResize) {
-      (base as any).push({
-        type: "resize",
-        mode: "size",
-        w: 150,
-        h: 150,
-        keep: false,
-      });
-    }
-
-    if (!hasPad) {
-      (base as any).push({
-        type: "pad",
-        w: 150,
-        h: 150,
-        mode: "constant",
-        r: 0,
-        g: 0,
-        b: 0,
-      });
-    }
-  }
-
-  return base;
 }
 
 /* ----------------- param mismatch for checklist ----------------- */
@@ -471,8 +377,13 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     "LLM assistant is waiting for your Stage 1 edits..."
   );
   const [aiAssistantLoading, setAiAssistantLoading] = useState(false);
-  const [agentHistory, setAgentHistory] = useState<{ ts: number; text: string }[]>([]);
+  const [agentHistory, setAgentHistory] = useState<ChatEntry[]>([]);
   const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
+  // Module 2 chat UI state
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Baymax bump animation
   const [baymaxBump, setBaymaxBump] = useState(false);
@@ -531,14 +442,124 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     const trimmed = text.trim();
     if (!trimmed || trimmed === "Thinking...") return;
     if (trimmed.startsWith("LLM assistant is waiting")) return;
-    const entry = { ts: Date.now(), text: trimmed };
+    appendChatEntry({ ts: Date.now(), role: "assistant", text: trimmed, source: "hint" });
+  }
+
+  function appendChatEntry(entry: ChatEntry) {
     setAgentHistory((prev) => {
-      const next = [entry, ...prev].slice(0, 200);
+      const next = [...prev, entry].slice(-200);
       try {
         window.localStorage.setItem(assistantHistoryKey, JSON.stringify(next));
       } catch {}
       return next;
     });
+  }
+
+  // Initialize chat history from localStorage
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(assistantHistoryKey);
+      if (!raw) {
+        setAgentHistory([]);
+        return;
+      }
+
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setAgentHistory([]);
+        return;
+      }
+
+      const normalized = parsed
+        .map((item: any) => {
+          if (!item || typeof item !== "object") return null;
+          const text = String(item.text ?? item.content ?? "").trim();
+          if (!text) return null;
+          return {
+            ts: Number(item.ts) || Date.now(),
+            role: item.role === "user" ? "user" : "assistant",
+            text,
+            source: item.source === "chat" ? "chat" : "hint",
+          } satisfies ChatEntry;
+        })
+        .filter(Boolean) as ChatEntry[];
+
+      setAgentHistory(normalized);
+    } catch {
+      setAgentHistory([]);
+    }
+  }, [assistantHistoryKey]);
+
+  useEffect(() => {
+    if (!chatPanelOpen || !chatContainerRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        chatContainerRef.current?.scrollTo({
+          top: chatContainerRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+      } catch {}
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [chatPanelOpen, agentHistory]);
+
+  // Send chat message to Module 2 backend
+  async function sendChatMessage(text: string) {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return;
+    const ws = workspaceRef.current;
+
+    const chains = (ws && getTopChains(ws).map((chain) => ({
+      top_block_type: chain[0]?.type || null,
+      blocks: chain.map((b) => blockToAnalyzerModel(b)),
+    }))) || [];
+
+    const payload = {
+      user_id: window.localStorage.getItem("vb_user_id") || "anon",
+      message: trimmed,
+      workspace_state: { chains },
+      stage_id: String(stage?.id || "1"),
+    };
+
+    appendChatEntry({ ts: Date.now(), role: "user", text: trimmed, source: "chat" });
+    setChatInput("");
+    setChatSending(true);
+    setAiAssistantText("Thinking...");
+    setAiAssistantLoading(true);
+    try {
+      const resp = await fetch(`${API_BASE}/module2/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(txt || resp.statusText);
+      }
+      const data = await resp.json();
+      const assistant = (data.assistant_response || "").toString();
+      if (assistant) {
+        // store assistant reply in persisted assistant history
+        persistAssistantHistory(assistant);
+        setAiAssistantText(assistant);
+        setAiAssistantLoading(false);
+      }
+    } catch (e: any) {
+      const msg = (e?.message || "Request failed").toString();
+      const errorText = `Error: ${msg}`;
+      setAiAssistantText(errorText);
+      setAiAssistantLoading(false);
+      appendChatEntry({ ts: Date.now(), role: "assistant", text: errorText, source: "chat" });
+    } finally {
+      setChatSending(false);
+      setAiAssistantLoading(false);
+      // scroll to bottom
+      requestAnimationFrame(() => {
+        try {
+          chatContainerRef.current?.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior: "smooth" });
+        } catch {}
+      });
+    }
   }
 
   /* ---------- Global CSS for glow + Baymax animation ---------- */
@@ -707,7 +728,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
           setAiAssistantLoading(false);
         }
       }
-    }, 450);
+    }, 800);
   }
 
   /* ---------- Blockly inject + listeners ---------- */
@@ -2077,6 +2098,14 @@ function updateBaymaxFromChecklist(
 
   /* ---------- UI ---------- */
 
+  const chatSignal = !chatPanelOpen
+    ? aiAssistantLoading
+      ? "thinking"
+      : aiAssistantText
+      ? "ready"
+      : "idle"
+    : "open";
+
   const getMood = () => {
     if (aiAssistantLoading) return "thinking";
     if (!aiAssistantText) return "idle";
@@ -2209,13 +2238,186 @@ function updateBaymaxFromChecklist(
 
               {(String(stage.id) === "1" || String(stage.id) === "2" || String(stage.id) === "3" || String(stage.id) === "4") && (
                 <div className="shrink-0 flex flex-col items-center justify-center">
-                  <PixelwiseCharacter message={aiAssistantText} mood={getMood()} loading={aiAssistantLoading} />
-                  <button
-                    className="mt-2 text-xs text-indigo-600 hover:text-indigo-700 underline"
-                    onClick={() => setAgentHistoryOpen(true)}
-                  >
-                    View chat history
-                  </button>
+                  {/* Floating chat FAB + drawer (Module 2) */}
+                  <div className="fixed bottom-6 right-6 z-[970] flex flex-col items-end gap-3">
+                    {chatPanelOpen && (
+                      <div className="w-[380px] max-w-[calc(100vw-3rem)] overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.28)]">
+                        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 bg-gradient-to-r from-sky-50 to-blue-50">
+                          <div className="flex items-center gap-2">
+                            <svg
+                              viewBox="0 0 100 100"
+                              className="h-6 w-6 drop-shadow-[0_0_4px_rgba(56,189,248,0.3)]"
+                              xmlns="http://www.w3.org/2000/svg"
+                              aria-hidden="true"
+                            >
+                              <defs>
+                                <radialGradient id="m2ChatAvatar" cx="50%" cy="40%" r="70%">
+                                  <stop offset="0%" stopColor="#ecfeff" />
+                                  <stop offset="100%" stopColor="#7dd3fc" />
+                                </radialGradient>
+                              </defs>
+                              <circle cx="50" cy="50" r="30" fill="url(#m2ChatAvatar)" />
+                              <circle cx="32" cy="28" r="3" fill="#38bdf8" opacity="0.7" />
+                              <circle cx="70" cy="30" r="2.5" fill="#0ea5e9" opacity="0.55" />
+                              <circle cx="41" cy="44" r="5" fill="white" stroke="#bae6fd" strokeWidth="0.6" />
+                              <circle cx="59" cy="44" r="5" fill="white" stroke="#bae6fd" strokeWidth="0.6" />
+                              <circle cx="42" cy="46" r="2.2" fill="#0ea5e9" />
+                              <circle cx="58" cy="46" r="2.2" fill="#0ea5e9" />
+                              <path d="M 40 62 Q 50 66 60 62" stroke="#0ea5e9" strokeWidth="2" fill="none" strokeLinecap="round" />
+                            </svg>
+                            <div>
+                              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">NeuraBuddy</div>
+                              <div className="text-[10px] text-sky-500 font-medium">Module 2 chat assistant</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="rounded-full px-3 py-1 text-[11px] font-semibold text-sky-700 hover:bg-white hover:text-sky-800 transition"
+                              onClick={() => setAgentHistoryOpen(true)}
+                            >
+                              History
+                            </button>
+                            <button
+                              className="rounded-full p-2 text-slate-500 hover:bg-white hover:text-slate-700 transition"
+                              onClick={() => setChatPanelOpen(false)}
+                              aria-label="Close chat"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+
+                        <div ref={chatContainerRef} className="max-h-[42vh] space-y-2 overflow-auto px-4 py-3">
+                          {agentHistory.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                              No conversation yet. Ask a question to start the assistant chat.
+                            </div>
+                          )}
+                          {agentHistory.map((entry, idx) => {
+                            const isUser = entry.role === "user";
+                            return (
+                              <div key={`${entry.ts}-${idx}`} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                                <div
+                                  className={`max-w-[88%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap shadow-sm ${
+                                    isUser
+                                      ? "bg-sky-500 text-white"
+                                      : entry.source === "hint"
+                                      ? "bg-sky-50 text-sky-900 border border-sky-200"
+                                      : "bg-slate-100 text-slate-800 border border-slate-200"
+                                  }`}
+                                >
+                                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70">
+                                    {isUser ? "You" : "NeuraBuddy"}
+                                  </div>
+                                  {entry.text}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {chatSending && (
+                            <div className="flex justify-start">
+                              <div className="rounded-2xl bg-slate-100 border border-slate-200 px-3 py-2 shadow-sm">
+                                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] opacity-70 text-slate-600">
+                                  NeuraBuddy
+                                </div>
+                                <div className="flex items-center gap-1.5 py-1">
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite]" />
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.15s]" />
+                                  <span className="h-2 w-2 rounded-full bg-slate-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.3s]" />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="border-t border-slate-100 bg-slate-50 p-3">
+                          <textarea
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                void sendChatMessage(chatInput);
+                              }
+                            }}
+                            rows={3}
+                            placeholder='Ask things like “Explain more” or “Why is this wrong?”'
+                            className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-2 focus:ring-sky-200"
+                          />
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <span className="text-[11px] text-slate-500">Shift+Enter for a new line.</span>
+                            <button
+                              className={`rounded-full px-4 py-1.5 text-xs font-semibold text-white transition ${
+                                chatSending || !chatInput.trim()
+                                  ? "bg-slate-400 cursor-not-allowed"
+                                  : "bg-sky-500 hover:bg-sky-400"
+                              }`}
+                              disabled={chatSending || !chatInput.trim()}
+                              onClick={() => void sendChatMessage(chatInput)}
+                            >
+                              {chatSending ? "Sending…" : "Send"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      className={`relative flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-[0_18px_35px_rgba(14,165,233,0.35)] ring-2 transition hover:scale-105 ${
+                        chatSignal === "thinking"
+                          ? "ring-amber-400"
+                          : chatSignal === "ready"
+                          ? "ring-emerald-400"
+                          : "ring-sky-300"
+                      }`}
+                      onClick={() => setChatPanelOpen((open) => !open)}
+                      aria-label={chatPanelOpen ? "Close assistant chat" : "Open assistant chat"}
+                      title={chatPanelOpen ? "Close chat" : "Open chat"}
+                    >
+                      <span className="sr-only">Assistant character</span>
+                      {!chatPanelOpen && chatSignal !== "open" && (
+                        <span className="absolute -inset-4 rounded-full border border-dashed border-sky-200/70 opacity-60" />
+                      )}
+                      {!chatPanelOpen && chatSignal === "thinking" && (
+                        <span className="absolute -top-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-white/90 px-2 py-1 shadow-[0_8px_20px_rgba(251,191,36,0.18)] ring-1 ring-amber-200/80">
+                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-[vb-think-dot_1s_ease-in-out_infinite]" />
+                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.18s]" />
+                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-[vb-think-dot_1s_ease-in-out_infinite_0.36s]" />
+                        </span>
+                      )}
+                      {!chatPanelOpen && chatSignal === "ready" && (
+                        <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(236,253,245,0.95)] ring-2 ring-white animate-[vb-ready-badge_1.2s_ease-in-out_infinite]">
+                          <span className="h-1.5 w-1.5 rounded-full bg-white" />
+                        </span>
+                      )}
+                      {chatPanelOpen && (
+                        <span className="absolute -bottom-1.5 left-1/2 h-2 w-2 -translate-x-1/2 rounded-full bg-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.8)]" />
+                      )}
+                      <svg
+                        viewBox="0 0 100 100"
+                        className="h-12 w-12 drop-shadow-[0_0_10px_rgba(56,189,248,0.35)]"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <defs>
+                          <radialGradient id="launcherBody" cx="50%" cy="40%" r="70%">
+                            <stop offset="0%" stopColor="#ecfeff" />
+                            <stop offset="100%" stopColor="#7dd3fc" />
+                          </radialGradient>
+                        </defs>
+                        <circle cx="50" cy="50" r="30" fill="url(#launcherBody)" />
+                        <circle cx="32" cy="28" r="3" fill="#38bdf8" opacity="0.7" />
+                        <circle cx="70" cy="30" r="2.5" fill="#0ea5e9" opacity="0.55" />
+                        <circle cx="74" cy="52" r="2" fill="#38bdf8" opacity="0.45" />
+                        <circle cx="30" cy="72" r="2.5" fill="#0ea5e9" opacity="0.55" />
+                        <circle cx="41" cy="44" r="5" fill="white" stroke="#bae6fd" strokeWidth="0.6" />
+                        <circle cx="59" cy="44" r="5" fill="white" stroke="#bae6fd" strokeWidth="0.6" />
+                        <circle cx="42" cy="46" r="2.2" fill="#0ea5e9" />
+                        <circle cx="58" cy="46" r="2.2" fill="#0ea5e9" />
+                        <path d="M 40 62 Q 50 66 60 62" stroke="#0ea5e9" strokeWidth="2" fill="none" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               )}
 
