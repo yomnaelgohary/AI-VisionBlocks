@@ -16,7 +16,7 @@ import MissionChecklistStage, {
   type Tri,
 } from "@/components/MissionChecklistStage";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL;
 const AGENT_THROTTLE_MS = 3500;
 const WORKSPACE_CHANGE_DEBOUNCE_MS = 300;
 const ANALYZER_REQUEST_TIMEOUT_MS = 12000;
