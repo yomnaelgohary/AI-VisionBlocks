@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+
 
 from app.core.config import settings
 from app.services.datasets import get_datasets_index, DatasetIndex
