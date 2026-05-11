@@ -1,5 +1,10 @@
 import StageRunner from "../(shared)/StageRunner";
 
-export default function Module2StagePage({ params }: { params: { stage: string } }) {
-  return <StageRunner stageId={params.stage} />;
+export default async function Module2StagePage({
+  params,
+}: {
+  params: Promise<{ stage: string }>;
+}) {
+  const { stage } = await params;
+  return <StageRunner stageId={stage} />;
 }

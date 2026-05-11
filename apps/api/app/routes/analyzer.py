@@ -2077,11 +2077,11 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                 "Respond in 2-3 short sentences, no bullets, friendly tone."
             ) + common_context
 
-        prompt = (
-            "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
-            "Do not say you are a healthcare or health care companion.\n\n"
-        ) + prompt
-        agent_text = _call_openrouter(prompt)
+    prompt = (
+        "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
+        "Do not say you are a healthcare or health care companion.\n\n"
+    ) + prompt
+    agent_text = _call_openrouter(prompt)
     agent_text = _sanitize_m2_agent_text(agent_text)
     agent_text = _strip_healthcare_claims(agent_text)
     history.last_hint = agent_text
