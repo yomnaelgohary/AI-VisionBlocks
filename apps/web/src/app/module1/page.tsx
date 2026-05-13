@@ -190,33 +190,6 @@ export default function Module1Page() {
     return "hint";
   };
 
-  // Load persisted history
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("vb_agent_history_module1");
-      if (!raw) return;
-
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return;
-
-      const normalized: ChatEntry[] = parsed
-        .map((item: any) => {
-          if (!item || typeof item !== "object") return null;
-          const text = String(item.text ?? item.content ?? "").trim();
-          if (!text) return null;
-          return {
-            ts: Number(item.ts) || Date.now(),
-            role: item.role === "user" ? "user" : "assistant",
-            text,
-            source: item.source === "chat" ? "chat" : "hint",
-          } satisfies ChatEntry;
-        })
-        .filter(Boolean) as ChatEntry[];
-
-      setAgentHistory(normalized);
-    } catch {}
-  }, []);
-
   // Baymax animation
   const [baymaxBump, setBaymaxBump] = useState(false);
   const lastBaymaxTextRef = useRef<string>(baymax);
@@ -479,28 +452,20 @@ export default function Module1Page() {
     setAiAssistantText(text === "Thinking…" ? "" : text);
     setAiAssistantLoading(text === "Thinking…");
 
-    // Persist meaningful hints to localStorage (skip transient messages)
+    // Keep chat history session-only so it resets on refresh or in a new tab.
     const skipPrefixes = ["Thinking…", "Hint unavailable", "Agent error", "Rate limited"];
     const shouldPersist = text && !skipPrefixes.some((p) => text.startsWith(p));
     if (shouldPersist) {
       const entry: ChatEntry = { ts: Date.now(), role: "assistant", text, source };
       setAgentHistory((prev) => {
-        const next = [...prev, entry].slice(-200);
-        try {
-          localStorage.setItem("vb_agent_history_module1", JSON.stringify(next));
-        } catch {}
-        return next;
+        return [...prev, entry].slice(-200);
       });
     }
   }
 
   function appendChatEntry(entry: ChatEntry) {
     setAgentHistory((prev) => {
-      const next = [...prev, entry].slice(-200);
-      try {
-        localStorage.setItem("vb_agent_history_module1", JSON.stringify(next));
-      } catch {}
-      return next;
+      return [...prev, entry].slice(-200);
     });
   }
 
@@ -1896,9 +1861,6 @@ export default function Module1Page() {
                 <button
                   className="text-sm text-slate-600 hover:underline"
                   onClick={() => {
-                    try {
-                      localStorage.removeItem("vb_agent_history_module1");
-                    } catch {}
                     setAgentHistory([]);
                   }}
                 >

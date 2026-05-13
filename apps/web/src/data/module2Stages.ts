@@ -139,7 +139,7 @@ export const module2Stages: StageConfig[] = [
       { type: "brightness_contrast", b: 10, c: 10 },
       { type: "blur_sharpen", blur: 0, sharp: 1.0 },
       // then resize towards 150 while keeping aspect ratio
-      { type: "resize", mode: "size", w: 150, h: 256, keep: "TRUE" },
+      { type: "resize", mode: "size", w: 150, h: 150, keep: "TRUE" },
       // and pad to exactly 150×150
       { type: "pad", w: 150, h: 150, mode: "constant" },
       { type: "normalize", mode: "zero_one" },

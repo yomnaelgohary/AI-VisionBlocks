@@ -96,6 +96,41 @@ class _ChatSession:
     memory: Any = None
 
 
+def _sanitize_block_names(text: str, replacements: Dict[str, str]) -> str:
+    if not text:
+        return text
+
+    sanitized = text
+    for raw, friendly in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+        # plain occurrence
+        sanitized = sanitized.replace(raw, friendly)
+        # backticked `dataset.select`
+        sanitized = sanitized.replace(f"`{raw}`", friendly)
+        # quoted 'dataset.select' and "dataset.select"
+        sanitized = sanitized.replace(f"'{raw}'", friendly)
+        sanitized = sanitized.replace(f'"{raw}"', friendly)
+        # html code tag variants
+        sanitized = sanitized.replace(f"<code>{raw}</code>", friendly)
+    return sanitized
+
+
+_M1_FRIENDLY_BLOCK_NAMES: Dict[str, str] = {
+    "dataset.select": "use dataset",
+    "dataset.info": "dataset info",
+    "dataset.class_counts": "class counts",
+    "dataset.class_distribution_preview": "class distribution preview (percent)",
+    "dataset.sample_image": "get sample image",
+    "image.channels_split": "split RGB channels (preview)",
+    "image.show": "show image",
+    "image.shape": "show image shape",
+    "image.to_grayscale_preview": "grayscale preview",
+}
+
+
+def _sanitize_m1_agent_text(text: str) -> str:
+    return _sanitize_block_names(text, _M1_FRIENDLY_BLOCK_NAMES)
+
+
 class _StudentHistory(BaseModel):
     last_missing_key: Optional[str] = None
     last_wrong_place: bool = False
@@ -644,8 +679,8 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
             "You are a tutor for Module 1 (dataset exploration). "
             "The student has not selected a dataset yet. "
             "In 1-2 sentences, explain that they must choose a dataset first "
-            "because every other step depends on it, and ask them to add the dataset.select block. "
-            "Be gentle and clear. You may mention block names. "
+            "because every other step depends on it, and ask them to add the use dataset block. "
+            "Be gentle and clear. You may mention block names as the student sees them in the toolbox. "
             "If dataset summary is available, mention it briefly to ground the hint. "
             "Use a short analogy only occasionally if it helps. "
             "If repeat_count > 0, acknowledge the last hint and rephrase it."
@@ -654,9 +689,9 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
         prompt = (
             "You are a tutor for Module 1 (dataset exploration). "
             "The student placed one or more blocks before selecting a dataset. "
-            "In 1-2 sentences, explain why dataset.select must come first, "
-            "and ask them to move those blocks under the dataset.select block. "
-            "Be gentle and clear. You may mention block names. "
+            "In 1-2 sentences, explain why use dataset must come first, "
+            "and ask them to move those blocks under the use dataset block. "
+            "Be gentle and clear. You may mention block names as the student sees them. "
             "If dataset summary is available, mention it briefly to ground the hint. "
             "Use a short analogy only occasionally if it helps. "
             "If repeat_count > 0, acknowledge the last hint and rephrase it."
@@ -665,8 +700,8 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
         prompt = (
         "You are a tutor for Module 1 (dataset exploration). "
         "Module 1 goal: help students inspect a dataset in this order: "
-        "dataset.select -> dataset.info -> dataset.class_counts -> "
-        "dataset.class_distribution_preview -> dataset.sample_image -> image.channels_split. "
+        "use dataset -> dataset info -> class counts -> "
+        "class distribution preview (percent) -> get sample image -> split RGB channels (preview). "
         "Given the checklist and planned actions, respond with 1-2 short sentences. "
         "First, briefly comment on the most recently added block (Last block). "
         "Then give a hint for ONLY the next missing step and explain briefly why it matters. "
@@ -687,6 +722,7 @@ def analyze_module1_with_agent(req: AnalyzeRequest, request: Request):
     prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
     prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
     agent_text = _call_openrouter(prompt)
+    agent_text = _sanitize_m1_agent_text(agent_text)
     agent_text = _strip_healthcare_claims(agent_text)
 
     history.last_hint = agent_text
@@ -764,6 +800,7 @@ def chat(req: ChatRequest, request: Request):
             "I can help explain the current hint if you point me at the block or question that feels confusing."
         )
 
+    assistant_response = _sanitize_m1_agent_text(assistant_response)
     _append_chat_turn(key, "assistant", assistant_response, source="chat")
 
     return ChatResponse(
@@ -842,6 +879,7 @@ def module4_chat(req: ChatRequest, request: Request):
             "I can help explain the current hint if you point me at the block or question that feels confusing."
         )
 
+    assistant_response = _sanitize_m4_agent_text(assistant_response)
     assistant_response = _strip_healthcare_claims(assistant_response)
 
     assistant_response = _strip_healthcare_claims(assistant_response)
@@ -958,17 +996,18 @@ M2_STAGE2_REQUIRED_FIELDS: Dict[str, Dict[str, Any]] = {
 }
 
 _M2_FRIENDLY_BLOCK_NAMES: Dict[str, str] = {
-    "m2.to_grayscale": "grayscale",
-    "m2.brightness_contrast": "brightness and contrast",
-    "m2.blur_sharpen": "blur and sharpen",
-    "m2.resize": "resize",
-    "m2.pad": "pad",
-    "m2.normalize": "normalize",
-    "m2.loop_dataset": "loop",
-    "m2.export_dataset": "export",
-    "m2.edges": "edge detection",
+    "dataset.select": "use dataset",
+    "m2.to_grayscale": "convert to grayscale",
+    "m2.brightness_contrast": "brightness / contrast",
+    "m2.blur_sharpen": "blur / sharpen",
+    "m2.resize": "resize image",
+    "m2.pad": "pad image to size",
+    "m2.normalize": "normalize pixels",
+    "m2.loop_dataset": "for each image in dataset",
+    "m2.export_dataset": "export processed dataset",
+    "m2.edges": "detect edges",
     "m2.crop_center": "center crop",
-    "m2.sample_image": "sample image",
+    "m2.sample_image": "get sample image",
 }
 
 _M2_FRIENDLY_FIELD_NAMES: Dict[str, str] = {
@@ -1032,25 +1071,16 @@ def _friendly_m2_validation_errors(validation_errors: List[str]) -> List[str]:
 
 
 def _sanitize_m2_agent_text(text: str) -> str:
-    sanitized = text
+    if not text:
+        return text
 
-    replacements = [
-        ("m2.brightness_contrast", "brightness and contrast"),
-        ("m2.blur_sharpen", "blur and sharpen"),
-        ("m2.to_grayscale", "grayscale"),
-        ("m2.resize", "resize"),
-        ("m2.pad", "pad"),
-        ("m2.normalize", "normalize"),
-        ("m2.loop_dataset", "loop"),
-        ("m2.export_dataset", "export"),
-        ("m2.edges", "edge detection"),
-        ("m2.crop_center", "center crop"),
-        ("m2.sample_image", "sample image"),
-    ]
+    # First replace known block ids with friendly names (handles backticks/quotes)
+    sanitized = _sanitize_block_names(text, _M2_FRIENDLY_BLOCK_NAMES)
 
-    for raw, friendly in replacements:
-        sanitized = sanitized.replace(raw, friendly)
+    # Alias handling for common short forms that may appear
+    sanitized = sanitized.replace("m2.grayscale", _M2_FRIENDLY_BLOCK_NAMES.get("m2.to_grayscale", "grayscale"))
 
+    # Replace field suffixes (keeps wording human-friendly)
     sanitized = sanitized.replace(".B", " brightness").replace(".C", " contrast")
     sanitized = sanitized.replace(".BLUR", " blur").replace(".SHARP", " sharpen")
     sanitized = sanitized.replace(".W", " width").replace(".H", " height")
@@ -1467,33 +1497,35 @@ M4_STAGE2_REQUIRED_ORDER = [
 ]
 
 
+_M4_FRIENDLY_BLOCK_NAMES: Dict[str, str] = {
+    "dataset.select": "use dataset",
+    "dataset.sample_image": "get sample image",
+    "m3.set_split_ratio": "set split ratio",
+    "m3.apply_split": "apply split",
+    "m4.model_init": "start new model",
+    "m4.layer_conv2d": "add conv layer",
+    "m4.layer_pool": "add pooling layer",
+    "m4.layer_dense": "add dense layer",
+    "m4.model_summary": "show model summary",
+    "m4.model_save": "save model as",
+    "m4.model_load": "use saved model",
+    "m4.train_hparams": "training setup",
+    "m4.train_start": "start training",
+    "m4.eval_test": "evaluate on test set",
+    "m4.predict_sample": "predict current sample",
+}
+
+
 def _friendly_m4_label(block_type: Optional[str]) -> str:
     if not block_type:
         return ""
-    labels = {
-        "dataset.select": "use dataset",
-        "m3.set_split_ratio": "set split ratio",
-        "m3.apply_split": "apply split",
-        "m4.model_init": "start new model",
-        "m4.layer_conv2d": "add conv layer",
-        "m4.layer_pool": "add pooling layer",
-        "m4.layer_dense": "add dense layer",
-        "m4.model_summary": "show model summary",
-        "m4.train_hparams": "training setup",
-        "m4.train_start": "start training",
-        "m4.eval_test": "evaluate on test set",
-        "dataset.sample_image": "get sample image",
-        "m4.predict_sample": "predict current sample",
-    }
-    return labels.get(block_type, block_type.replace("m3.", "").replace("m4.", "").replace("dataset.", ""))
+    return _M4_FRIENDLY_BLOCK_NAMES.get(block_type, block_type.replace("m3.", "").replace("m4.", "").replace("dataset.", ""))
 
 
 def _sanitize_m4_agent_text(text: str) -> str:
     if not text:
         return text
-    for t in M4_STAGE2_REQUIRED_ORDER:
-        text = text.replace(t, _friendly_m4_label(t))
-    return text
+    return _sanitize_block_names(text, _M4_FRIENDLY_BLOCK_NAMES)
 
 
 def _strip_healthcare_claims(text: str) -> str:
@@ -1786,7 +1818,7 @@ def analyze_module4_with_agent(req: AnalyzeRequest, request: Request):
     if 'prompt' in locals() and prompt:
         try:
             prompt = "Style: 1-2 short sentences. Be direct, no greetings, no fluff.\n\n" + prompt
-            raw = _call_openrouter(prompt)
+            raw = _call_openrouter(_sanitize_m4_agent_text(prompt))
             agent_text = _sanitize_m4_agent_text(raw)
             agent_text = _strip_healthcare_claims(agent_text)
         except Exception as exc:  # keep endpoint stable when LLM fails
@@ -1840,28 +1872,19 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
     history.last_problem_key = problem_key
     history.last_seen = now
 
-    if stage_id == "3":
-        # Keep Stage 3 hints conceptual and avoid leaking full ordered answers.
-        common_context = (
-            f"\n\nCurrent preprocessing chain: {chain_text}. "
-            f"Full chain: {full_chain_text}. "
-            f"Problem type: {problem_type}. "
-            f"Next missing (if any): {next_missing}. "
-            f"Wrong chosen block (if any): {wrong_block}. "
-            f"Repeat count for same mistake: {history.repeat_count}."
-        )
-    else:
-        common_context = (
-            f"\n\nCurrent preprocessing chain: {chain_text}. "
-            f"Full chain: {full_chain_text}. "
-            f"Expected {stage_label} order: {expected_text}. "
-            f"Problem type: {problem_type}. "
-            f"Next missing (if any): {next_missing}. "
-            f"Wrong chosen block (if any): {wrong_block}. "
-            f"Invalid parameter block (if any): {invalid_param_block}. "
-            f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
-            f"Repeat count for same mistake: {history.repeat_count}."
-        )
+    # Build a detailed common context for the LLM that includes the current chain,
+    # the full workspace chain, expected order for this stage, and validation details.
+    common_context = (
+        f"\n\nCurrent preprocessing chain: {chain_text}. "
+        f"Full chain: {full_chain_text}. "
+        f"Expected {stage_label} order: {expected_text}. "
+        f"Problem type: {problem_type}. "
+        f"Next missing (if any): {next_missing}. "
+        f"Wrong chosen block (if any): {wrong_block}. "
+        f"Invalid parameter block (if any): {invalid_param_block}. "
+        f"Validation details: {json.dumps(validation_errors, ensure_ascii=True)}. "
+        f"Repeat count for same mistake: {history.repeat_count}."
+    )
 
     if stage_id == "4":
         friendly_block = _friendly_m2_block_name(invalid_param_block or wrong_block or next_missing or "m2.normalize")
@@ -1911,7 +1934,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
             "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
             "Do not say you are a healthcare or health care companion.\n\n"
         ) + prompt
-        agent_text = _call_openrouter(prompt)
+        agent_text = _call_openrouter(_sanitize_m2_agent_text(prompt))
         agent_text = _sanitize_m2_agent_text(agent_text)
         agent_text = _strip_healthcare_claims(agent_text)
         history.last_hint = agent_text
@@ -2041,19 +2064,45 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
                     "Do NOT list full sequence or exact order. Respond in 2-3 short sentences, no bullets."
                 ) + common_context
         elif stage_id == "3":
-            if history.repeat_count >= 1:
+            stage3_role_hints = {
+                "m2.to_grayscale": "the first per-image transformation that makes each image easier to process consistently",
+                "m2.brightness_contrast": "the adjustment that comes after turning each image into a simpler form, before smoothing or sizing steps",
+                "m2.blur_sharpen": "the visual cleanup step that belongs after basic intensity adjustments and before resizing",
+                "m2.resize": "the step that makes every image the same size before padding and normalization",
+                "m2.pad": "the step that fills out the image size after resizing so the dimensions are uniform",
+                "m2.normalize": "the final preprocessing step before export that scales the pixel values into a common range",
+            }
+            stage3_next_after = {
+                "m2.to_grayscale": "m2.brightness_contrast",
+                "m2.brightness_contrast": "m2.blur_sharpen",
+                "m2.blur_sharpen": "m2.resize",
+                "m2.resize": "m2.pad",
+                "m2.pad": "m2.normalize",
+                "m2.normalize": "m2.export_dataset",
+            }
+            stage3_focus = next_missing or stage3_next_after.get(stage_problem.get("last_block") or "")
+            stage3_role = stage3_role_hints.get(stage3_focus or "", "the next preprocessing step in the loop body")
+
+            if history.repeat_count >= 2:
                 prompt = (
                     "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
-                    "The student is still missing part of the loop-body recipe. "
-                    "Give a clearer hint that the loop body should contain the recipe in a sensible flow, while keeping a coaching tone. "
-                    "Give only one next-step hint. Do NOT enumerate the full sequence or exact order. Respond in 2-3 short sentences, no bullets."
+                    "The student has already made progress in the loop, so the next hint must react to the current chain instead of restating the recipe. "
+                    f"Point to {stage3_role} and explain why it belongs next in the loop. "
+                    "Do not name the block id and do not say 'add' or 'place'. Respond in 2-3 short sentences, no bullets, supportive but direct."
+                ) + common_context
+            elif history.repeat_count == 1:
+                prompt = (
+                    "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
+                    "The student is repeating the same loop-body mistake, so make the hint a little clearer than before. "
+                    f"Describe {stage3_role} in relation to the current chain and ask them to inspect what should come next. "
+                    "Do not name the block id and do not give the full sequence. Respond in 2-3 short sentences, no bullets."
                 ) + common_context
             else:
                 prompt = (
                     "You are the AI assistant for VisionBlocks Module 2 Stage 3 (Loop & Export). "
-                    "A required piece is still missing in this stage. "
-                    "Gently hint that the loop should contain the complete preprocessing recipe before the final export step. "
-                    "Give only one next-step hint. Do NOT enumerate full sequence or exact order. Respond in 2-3 short sentences, no bullets, friendly tone."
+                    "A required loop-body step is still missing. "
+                    f"Give an indirect hint about {stage3_role} using the current chain, without naming the block or telling the student exactly what to drag. "
+                    "Respond in 2-3 short sentences, no bullets, warm tone."
                 ) + common_context
         elif history.repeat_count >= 2:
             prompt = (
@@ -2081,7 +2130,7 @@ def analyze_module2_with_agent(req: AnalyzeRequest, request: Request):
         "Style: 1-2 short sentences. Be direct, no greetings, no fluff. "
         "Do not say you are a healthcare or health care companion.\n\n"
     ) + prompt
-    agent_text = _call_openrouter(prompt)
+    agent_text = _call_openrouter(_sanitize_m2_agent_text(prompt))
     agent_text = _sanitize_m2_agent_text(agent_text)
     agent_text = _strip_healthcare_claims(agent_text)
     history.last_hint = agent_text
@@ -2168,7 +2217,7 @@ def module2_chat(req: Module2ChatRequest, request: Request):
     prompt = "\n\n".join(prompt_parts)
 
     try:
-        assistant_response = _call_openrouter(prompt).strip()
+        assistant_response = _call_openrouter(_sanitize_m2_agent_text(prompt)).strip()
     except Exception:
         if latest_hint:
             assistant_response = (
