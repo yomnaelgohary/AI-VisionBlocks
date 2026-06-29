@@ -3,34 +3,14 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChevronRight, BookOpen } from "lucide-react";
+import { module2Stages } from "@/data/module2Stages";
 
 export default function Module2Index() {
-  const stages = [
-    {
-      id: "1",
-      title: "Stage 1: Grayscale + Cleanup",
-      short:
-        "Convert to grayscale and do gentle brightness/contrast and blur/sharpen cleanup.",
-    },
-    {
-      id: "2",
-      title: "Stage 2: Resize, Pad & Normalize",
-      short:
-        "Resize and pad to a 150×150 frame, then normalize to 0–1 for stable model-ready inputs.",
-    },
-    {
-      id: "3",
-      title: "Stage 3: Looping & Exporting",
-      short:
-        "Apply your whole pipeline to the dataset in a loop and export a fresh, processed dataset.",
-    },
-    {
-      id: "4",
-      title: "Stage 4: Quiz - Add Normalize",
-      short:
-        "The chain is already built for you. Find the missing normalize block and complete the pipeline.",
-    },
-  ];
+  const stages = module2Stages.map((s) => ({
+    id: String(s.id),
+    title: s.title,
+    short: Array.isArray(s.intro) ? s.intro[0] : String(s.intro || ""),
+  }));
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden animated-bg">

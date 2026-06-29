@@ -96,11 +96,11 @@ export const module2Stages: StageConfig[] = [
   // STAGE 2 – Resize, Pad & Normalize
   {
     id: 2,
-    title: "Stage 2: Resize, Pad & Normalize",
+    title: "Stage 2: Standardize Image Format",
     type: "pipeline",
     intro: [
-      "Resize images so they share a consistent size while keeping aspect ratio.",
-      "Then pad to a clean 150×150 square and normalize values to 0-1.",
+      "Continue building your preprocessing pipeline with additional transformations.",
+      "Ensure all images are prepared in a consistent, uniform format for model training.",
     ],
     help: {
       title: "Why Resize, Pad, and Normalize?",
@@ -191,14 +191,14 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 4 – Quiz: Missing Normalize
+  // STAGE 4 – Quiz: Find Missing Block
   {
     id: 4,
-    title: "Stage 4: Quiz - Add Normalize",
+    title: "Stage 4: Quiz",
     type: "pipeline",
     intro: [
       "The pipeline is already built for you, but one important block is missing.",
-      "Find the missing normalize block and place it where it belongs to complete the chain.",
+      "Find the missing block and place it where it belongs to complete the chain.",
     ],
     help: {
       title: "Quiz Stage: Fill the Gap",
@@ -206,7 +206,7 @@ export const module2Stages: StageConfig[] = [
     This stage is a quiz. The workspace already shows the preprocessing chain from Stages 1 and 2,
     but one block has been removed on purpose.
 
-    Your job is to identify the missing normalize block and add it in the correct place.
+    Your job is to identify the missing block and add it in the correct place.
     The rest of the UI stays the same so you can focus only on the block choice.
     `.trim(),
     },

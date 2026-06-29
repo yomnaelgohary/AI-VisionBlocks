@@ -1790,7 +1790,7 @@ function updateBaymaxFromChecklist(
           <div className="flex items-baseline gap-2">
             <span className="text-lg font-semibold text-slate-900">VisionBlocks</span>
             <span className="text-xs text-slate-500">
-              Module 4 · Model building & training · {stage.title}
+              Module 3 · Model building & training · {stage.title}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -1804,7 +1804,7 @@ function updateBaymaxFromChecklist(
               onClick={goModuleHome}
               className="px-3 py-1.5 rounded-full border border-slate-300 bg-white/80 text-xs font-medium text-slate-700 hover:border-sky-400 hover:text-sky-600 hover:shadow-[0_0_0_1px_rgba(56,189,248,0.45)] transition"
             >
-              Module 4
+              Module 3
             </button>
             <button
               onClick={() => {
@@ -1921,7 +1921,7 @@ function updateBaymaxFromChecklist(
                             </svg>
                             <div>
                               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">NeuraBuddy</div>
-                              <div className="text-[10px] text-sky-500 font-medium">Module 4 chat assistant</div>
+                              <div className="text-[10px] text-sky-500 font-medium">Module 3 chat assistant</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
